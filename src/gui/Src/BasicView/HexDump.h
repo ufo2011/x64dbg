@@ -1,9 +1,10 @@
 #pragma once
 
 #include "AbstractTableView.h"
-#include "RichTextPainter.h"
-#include "MemoryPage.h"
-#include "VaHistory.h"
+#include <Utils/RichTextPainter.h>
+#include <Memory/MemoryPage.h>
+#include <Utils/VaHistory.h>
+#include <Disassembler/Architecture.h>
 
 class HexDump : public AbstractTableView
 {
@@ -31,7 +32,8 @@ public:
         HexWord,
         UnicodeWord,
         SignedDecWord,
-        UnsignedDecWord
+        UnsignedDecWord,
+        HalfFloatWord //half precision floatint point
     };
 
     enum DwordViewMode
@@ -94,7 +96,7 @@ public:
 
     QString paintContent(QPainter* painter, duint row, duint column, int x, int y, int w, int h) override;
     void paintGraphicDump(QPainter* painter, int x, int y, int addr);
-    void printSelected(QPainter* painter, duint row, duint column, int x, int y, int w, int h);
+    void printBackground(QPainter* painter, duint row, duint column, int x, int y, int w, int h);
 
     // Selection Management
     void expandSelectionUpTo(duint rva);
@@ -104,17 +106,17 @@ public:
     duint getSelectionEnd() const;
     bool isSelected(duint rva) const;
 
-    virtual void getColumnRichText(duint column, duint rva, RichTextPainter::List & richText);
+    virtual void getColumnRichText(duint column, duint rva, RichTextPainter::List & richText) const;
 
     static size_t getSizeOf(DataSize size);
 
-    void toString(DataDescriptor desc, duint rva, uint8_t* data, RichTextPainter::CustomRichText_t & richText);
+    void toString(DataDescriptor desc, duint rva, const uint8_t* data, RichTextPainter::CustomRichText_t & richText) const;
 
-    void byteToString(duint rva, uint8_t byte, ByteViewMode mode, RichTextPainter::CustomRichText_t & richText);
-    void wordToString(duint rva, uint16_t word, WordViewMode mode, RichTextPainter::CustomRichText_t & richText);
+    void byteToString(duint rva, uint8_t byte, ByteViewMode mode, RichTextPainter::CustomRichText_t & richText) const;
+    void wordToString(duint rva, uint16_t word, WordViewMode mode, RichTextPainter::CustomRichText_t & richText) const;
     static void dwordToString(duint rva, uint32_t dword, DwordViewMode mode, RichTextPainter::CustomRichText_t & richText);
     static void qwordToString(duint rva, uint64_t qword, QwordViewMode mode, RichTextPainter::CustomRichText_t & richText);
-    static void twordToString(duint rva, void* tword, TwordViewMode mode, RichTextPainter::CustomRichText_t & richText);
+    static void twordToString(duint rva, const void* tword, TwordViewMode mode, RichTextPainter::CustomRichText_t & richText);
 
     int getItemIndexFromX(int x) const;
     duint getItemStartingAddress(int x, int y);
@@ -132,12 +134,15 @@ public:
 
     duint getTableOffsetRva() const;
     QString makeAddrText(duint va) const;
-    QString makeCopyText();
+    QString makeCopyText() const;
 
     void setupCopyMenu();
 
     VaHistory mHistory;
 
+    //color
+    void setAddressColor(duint vaStart, duint vaEnd, unsigned int color);
+    void clearAddressColor(duint vaStart, duint vaEnd);
 signals:
     void selectionUpdated();
 
@@ -150,6 +155,8 @@ public slots:
     void copyRvaSlot();
     void gotoPreviousSlot();
     void gotoNextSlot();
+    void updateSelectionUnderline();
+    void selectionChangedSlot();
 
 private:
     enum GuiState
@@ -184,6 +191,8 @@ private:
     QColor mByteIsPrintColor;
     QColor mByteIsPrintBackgroundColor;
 
+    std::vector<QColor> mAddressColorPresets;
+
     QColor mUserModuleCodePointerHighlightColor;
     QColor mUserModuleDataPointerHighlightColor;
     QColor mSystemModuleCodePointerHighlightColor;
@@ -205,8 +214,14 @@ private:
     } mUpdateCache;
     std::vector<uint8_t> mUpdateCacheData;
     std::vector<uint8_t> mUpdateCacheTemp;
+    mutable std::vector<uint8_t> mReadBuffer;
+
+    std::vector<uint8_t> mUnderlineBuffer;
+    std::vector<std::pair<duint, duint>> mUnderlineRanges;
 
 protected:
+    void prepareData() override;
+
     Architecture* mArchitecture = nullptr;
     MemoryPage* mMemPage = nullptr;
     dsint mByteOffset = 0;
@@ -221,4 +236,7 @@ protected:
     QAction* mCopySelection;
     duint mUnderlineRangeStartVa = 0;
     duint mUnderlineRangeEndVa = 0;
+    bool mPointerUnderliningEnabled = true;
+    bool mSelectionUnderliningEnabled = false;
+    int accessibilitySelectedRow() const override;
 };

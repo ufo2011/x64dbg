@@ -84,27 +84,28 @@ bool cbInstrCommentList(int argc, char* argv[])
     GuiReferenceSetRowCount(0);
     GuiReferenceReloadData();
     size_t cbsize;
-    CommentEnum(0, &cbsize);
+    CommentEnum(nullptr, &cbsize);
     if(!cbsize)
     {
         dputs(QT_TRANSLATE_NOOP("DBG", "No comments"));
         return true;
     }
-    Memory<COMMENTSINFO*> comments(cbsize, "cbInstrCommentList:comments");
-    CommentEnum(comments(), 0);
+    std::vector<COMMENTSINFO> comments;
+    comments.resize(cbsize / sizeof(COMMENTSINFO));
+    CommentEnum(comments.data(), nullptr);
     int total = 0;
     for(int i = 0; i < (int)(cbsize / sizeof(COMMENTSINFO)); i++)
     {
-        if(!listAuto && !comments()[i].manual)
+        if(!listAuto && !comments[i].manual)
             continue;
         GuiReferenceSetRowCount(total + 1);
         char addrText[20] = "";
-        sprintf_s(addrText, "%p", (void*)comments()[i].addr);
+        sprintf_s(addrText, "%p", (void*)comments[i].addr);
         GuiReferenceSetCellContent(total, 0, addrText);
         char disassembly[GUI_MAX_DISASSEMBLY_SIZE] = "";
-        if(GuiGetDisassembly(comments()[i].addr, disassembly))
+        if(GuiGetDisassembly(comments[i].addr, disassembly))
             GuiReferenceSetCellContent(total, 1, disassembly);
-        GuiReferenceSetCellContent(total, 2, comments()[i].text.c_str());
+        GuiReferenceSetCellContent(total, 2, comments[i].text.c_str());
         total++;
     }
     varset("$result", total, false);
@@ -116,7 +117,7 @@ bool cbInstrCommentList(int argc, char* argv[])
 
 bool cbInstrCommentClear(int argc, char* argv[])
 {
-    CommentClear();
+    CommentClear(false);
     GuiUpdateAllViews();
     dputs(QT_TRANSLATE_NOOP("DBG", "All comments deleted!"));
     return true;
@@ -192,7 +193,7 @@ bool cbInstrLabelList(int argc, char* argv[])
 
 bool cbInstrLabelClear(int argc, char* argv[])
 {
-    LabelClear();
+    LabelClear(false);
     GuiUpdateAllViews();
     dputs(QT_TRANSLATE_NOOP("DBG", "All labels deleted!"));
     return true;
@@ -275,7 +276,7 @@ bool cbInstrBookmarkList(int argc, char* argv[])
 
 bool cbInstrBookmarkClear(int argc, char* argv[])
 {
-    BookmarkClear();
+    BookmarkClear(false);
     GuiUpdateAllViews();
     dputs(QT_TRANSLATE_NOOP("DBG", "All bookmarks deleted!"));
     return true;
@@ -369,7 +370,7 @@ bool cbInstrFunctionList(int argc, char* argv[])
 
 bool cbInstrFunctionClear(int argc, char* argv[])
 {
-    FunctionClear();
+    FunctionClear(false);
     GuiUpdateAllViews();
     dputs(QT_TRANSLATE_NOOP("DBG", "All functions deleted!"));
     return true;
@@ -460,7 +461,7 @@ bool cbInstrArgumentList(int argc, char* argv[])
 
 bool cbInstrArgumentClear(int argc, char* argv[])
 {
-    ArgumentClear();
+    ArgumentClear(false);
     GuiUpdateAllViews();
     dputs(QT_TRANSLATE_NOOP("DBG", "All arguments deleted!"));
     return true;
@@ -560,7 +561,7 @@ bool cbInstrLoopList(int argc, char* argv[])
 
 bool cbInstrLoopClear(int argc, char* argv[])
 {
-    LoopClear();
+    LoopClear(false);
     GuiUpdateAllViews();
     dputs(QT_TRANSLATE_NOOP("DBG", "All loops deleted!"));
     return true;

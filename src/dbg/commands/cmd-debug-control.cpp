@@ -16,6 +16,7 @@
 #include "database.h"
 #include "exception.h"
 #include "stringformat.h"
+#include "simplescript.h"
 
 static bool isInt3Exception()
 {
@@ -125,7 +126,9 @@ bool cbDebugInit(int argc, char* argv[])
     dprintf(QT_TRANSLATE_NOOP("DBG", "Debugging: %s\n"), arg1);
     hFile.Close();
 
-    auto arch = GetPeArch(arg1w.c_str());
+    uint32_t entryPointRva = 0;
+    bool isDll = false;
+    auto arch = GetPeArch(arg1w.c_str(), &entryPointRva, &isDll);
 
     // Translate Any CPU to the actual architecture
     if(arch == PeArch::DotnetAnyCpu)
@@ -168,6 +171,8 @@ bool cbDebugInit(int argc, char* argv[])
     init.exe = arg1;
     init.commandline = arg2;
     init.currentfolder = currentfolder;
+    init.entryPointRva = entryPointRva;
+    init.isDll = isDll;
 
     dbgcreatedebugthread(&init);
     return true;
@@ -222,6 +227,7 @@ bool cbDebugStop(int argc, char* argv[])
                     DbSave(DbLoadSaveType::All);
                     TerminateThread(hDebugLoopThreadCopy, 1); // TODO: this will lose state and cause possible corruption if a critical section is still owned
                     CloseHandle(hDebugLoopThreadCopy);
+                    bIsDebugging = false;
                     return false;
                 }
             }
@@ -247,7 +253,24 @@ bool cbDebugAttach(int argc, char* argv[])
         return false;
 
     EXCLUSIVE_ACQUIRE(LockDebugStartStop);
-    cbDebugStop(argc, argv);
+
+    // Detach instead of terminate when attaching to a new process (if setting enabled)
+    if(bIsDebugging && settingboolget("Engine", "DetachOnAttach", false))
+    {
+        cbDebugDetach(argc, argv);
+
+        if(hDebugLoopThread)
+        {
+            WaitForSingleObject(hDebugLoopThread, INFINITE);
+            CloseHandle(hDebugLoopThread);
+            hDebugLoopThread = nullptr;
+        }
+    }
+    else
+    {
+        cbDebugStop(argc, argv);
+    }
+
     ASSERT_TRUE(hDebugLoopThread == nullptr);
 
     Handle hProcess = TitanOpenProcess(PROCESS_ALL_ACCESS, false, (DWORD)pid);
@@ -307,6 +330,7 @@ bool cbDebugAttach(int argc, char* argv[])
     static INIT_STRUCT init;
     init.attach = true;
     init.pid = (DWORD)pid;
+    init.pauseAtAttach = ScriptIsExecutingCommand();
     dbgcreatedebugthread(&init);
     return true;
 }
@@ -337,6 +361,7 @@ bool cbDebugDetach(int argc, char* argv[])
         dputs(QT_TRANSLATE_NOOP("DBG", "Detached!"));
     _dbg_animatestop(); // Stop animating
     unlock(WAITID_RUN); // run to resume the debug loop if necessary
+    HistoryClear();
     return true;
 }
 
@@ -391,21 +416,52 @@ bool cbDebugPause(int argc, char* argv[])
         dputs(QT_TRANSLATE_NOOP("DBG", "Program is not running"));
         return false;
     }
+    // If the previous pause request could not break the debuggee and no debug
+    // events happened since, the debuggee is stuck in a wait that the code
+    // below cannot interrupt. Requesting a pause again after a few seconds
+    // falls back to a break-in thread. This is not done right away because the
+    // extra thread can be used by the debuggee to detect the debugger.
+    static ULONGLONG lastPauseRequestTime = 0;
+    static duint lastPauseRequestEventCount = 0;
+    auto now = GetTickCount64();
+    auto eventCount = dbggetdbgeventcount();
+    auto stuck = lastPauseRequestTime != 0
+                 && now - lastPauseRequestTime >= 2000
+                 && eventCount == lastPauseRequestEventCount;
+    lastPauseRequestTime = now;
+    lastPauseRequestEventCount = eventCount;
+    if(stuck && dbgspawnbreakinthread())
+        return true;
+    // After attaching, the active thread is whatever thread reported the last
+    // attach event (usually an idle worker that never wakes up). Target the
+    // main thread instead until a real debug event selects an active thread.
+    HANDLE hPauseThread = hActiveThread;
+    if(auto mainThreadId = dbggetattachmainthread())
+    {
+        auto hMainThread = ThreadGetHandle(mainThreadId);
+        if(hMainThread)
+            hPauseThread = hMainThread;
+    }
+    // As soon as SetBPX plants the INT3, another thread can hit it and the
+    // breakpoint callback can reassign hActiveThread. Keep using this local
+    // handle so SuspendThread and ResumeThread target the same thread.
+    DWORD dwPauseThreadId = GetThreadId(hPauseThread);
+    // TODO: get suspend count instead, this can be detected
     // Interesting behavior found by JustMagic, if the active thread is suspended pause would fail
-    auto previousSuspendCount = SuspendThread(hActiveThread);
+    auto previousSuspendCount = SuspendThread(hPauseThread);
     if(previousSuspendCount != 0)
     {
         if(previousSuspendCount != -1)
-            ResumeThread(hActiveThread);
+            ResumeThread(hPauseThread);
         dputs(QT_TRANSLATE_NOOP("DBG", "The active thread is suspended, switch to a running thread to pause the process"));
         // TODO: perhaps inject an INT3 in the process as an alternative to failing?
         return false;
     }
-    duint CIP = GetContextDataEx(hActiveThread, UE_CIP);
+    duint CIP = GetContextDataEx(hPauseThread, UE_CIP);
     if(!SetBPX(CIP, UE_BREAKPOINT, cbPauseBreakpoint))
     {
         dprintf(QT_TRANSLATE_NOOP("DBG", "Error setting breakpoint at %p! (SetBPX)\n"), CIP);
-        if(ResumeThread(hActiveThread) == -1)
+        if(ResumeThread(hPauseThread) == -1)
         {
             dputs(QT_TRANSLATE_NOOP("DBG", "Error resuming thread"));
             return false;
@@ -415,8 +471,8 @@ bool cbDebugPause(int argc, char* argv[])
     //WORKAROUND: If a program is stuck in NtUserGetMessage (GetMessage was called), this
     //will send a WM_NULL to stop the waiting. This only works if the message is not filtered.
     //OllyDbg also does this in a similar way.
-    PostThreadMessageA(ThreadGetId(hActiveThread), WM_NULL, 0, 0);
-    if(ResumeThread(hActiveThread) == -1)
+    PostThreadMessageA(dwPauseThreadId, WM_NULL, 0, 0);
+    if(ResumeThread(hPauseThread) == -1)
     {
         dputs(QT_TRANSLATE_NOOP("DBG", "Error resuming thread"));
         return false;
@@ -505,6 +561,8 @@ static bool IsRepeated(const Zydis & zydis)
     case ZYDIS_MNEMONIC_SCASD:
     case ZYDIS_MNEMONIC_SCASQ:
         return (zydis.GetInstr()->info.attributes & (ZYDIS_ATTRIB_HAS_REP | ZYDIS_ATTRIB_HAS_REPZ | ZYDIS_ATTRIB_HAS_REPNZ)) != 0;
+    default:
+        break;
     }
     return false;
 }

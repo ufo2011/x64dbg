@@ -253,7 +253,7 @@ void CPUStack::setupContextMenu()
     mFreezeStack->setCheckable(true);
 
     //Follow in Memory Map
-    mCommonActions->build(mMenuBuilder, CommonActions::ActionMemoryMap | CommonActions::ActionDump | CommonActions::ActionDumpData);
+    mCommonActions->build(mMenuBuilder, CommonActions::ActionMemoryMap | CommonActions::ActionDisplayType | CommonActions::ActionDump | CommonActions::ActionDumpData);
 
     //Follow in Stack
     auto followStackName = ArchValue(tr("Follow DWORD in &Stack"), tr("Follow QWORD in &Stack"));
@@ -283,6 +283,22 @@ void CPUStack::setupContextMenu()
 
     //Follow PTR in Dump
     mCommonActions->build(mMenuBuilder, CommonActions::ActionDumpN | CommonActions::ActionWatch);
+
+    duint addressColorCount = ConfigUint("Colors", "AddressColorCount");
+    MenuBuilder* colorMenu = new MenuBuilder(this);
+    for(duint i = 0; i < addressColorCount; i++)
+    {
+        char addressColor[MAX_SETTING_SIZE] = "";
+        if(BridgeSettingGet("Colors", QString("AddressColor%1").arg(i).toUtf8().constData(), addressColor))
+        {
+            QAction* action = makeActionColor(QColor(addressColor), SLOT(setAddressColorSlot()));
+            action->setData(uint(i + 1));
+            colorMenu->addAction(action);
+        }
+    }
+    colorMenu->addAction(makeAction(DIcon("eraser"), tr("Clear"), SLOT(clearAddressColorSlot())));
+    mMenuBuilder->addMenu(makeMenu(DIcon("color-swatches"), tr("Color")), colorMenu);
+
     mMenuBuilder->addAction(makeAction(tr("Edit columns..."), SLOT(editColumnDialog())));
 
     mPluginMenu = new QMenu(this);
@@ -308,7 +324,7 @@ void CPUStack::updateFreezeStackAction()
     mFreezeStack->setChecked(bStackFrozen);
 }
 
-void CPUStack::getColumnRichText(duint col, duint rva, RichTextPainter::List & richText)
+void CPUStack::getColumnRichText(duint col, duint rva, RichTextPainter::List & richText) const
 {
     // Compute VA
     duint va = rvaToVa(rva);
@@ -864,9 +880,18 @@ void CPUStack::findPattern()
 {
     HexEditDialog hexEdit(this);
     hexEdit.isDataCopiable(false);
-    hexEdit.showStartFromSelection(true, ConfigBool("Gui", "CPUStackStartFromSelect"));
     hexEdit.mHexEdit->setOverwriteMode(false);
     hexEdit.setWindowTitle(tr("Find Pattern..."));
+
+    // Setup find mode for stack
+    duint stackBase = DbgMemFindBaseAddr(rvaToVa(getSelectionStart()), 0);
+    duint stackSize = 0;
+    DbgMemFindBaseAddr(rvaToVa(getSelectionStart()), &stackSize);
+    duint stackEnd = stackBase + stackSize;
+    duint selectionStart = rvaToVa(getSelectionStart());
+
+    hexEdit.setupFindMode(stackBase, stackEnd, selectionStart, ConfigBool("Gui", "CPUStackStartFromSelect"));
+
     if(hexEdit.exec() != QDialog::Accepted)
         return;
 
@@ -874,7 +899,7 @@ void CPUStack::findPattern()
     bool startFromSelection = hexEdit.startFromSelection();
     Config()->setBool("Gui", "CPUStackStartFromSelect", startFromSelection);
     if(!startFromSelection)
-        addr = DbgMemFindBaseAddr(addr, 0);
+        addr = stackBase;
 
     QString addrText = ToPtrString(addr);
     DbgCmdExec(QString("findall " + addrText + ", " + hexEdit.mHexEdit->pattern() + ", &data&"));
@@ -912,7 +937,7 @@ void CPUStack::realignSlot()
 #else //x86
     mCsp &= ~0x3;
 #endif //_WIN64
-    DbgValToString("csp", mCsp);
+    DbgValSetScalar("csp", mCsp);
     GuiUpdateAllViews();
 }
 
@@ -983,4 +1008,28 @@ void CPUStack::copyCommentsColumnSlot()
     }
 
     Bridge::CopyToClipboard(clipboard);
+}
+
+
+void CPUStack::setAddressColorSlot()
+{
+    if(!DbgIsDebugging())
+        return;
+    QAction* action = qobject_cast<QAction*>(sender());
+    if(!action)
+        return;
+
+    unsigned int color = action->data().toUInt();
+    setAddressColor(rvaToVa(getSelectionStart()), rvaToVa(getSelectionEnd()), color);
+
+    GuiUpdateAllViews();
+}
+
+void CPUStack::clearAddressColorSlot()
+{
+    if(!DbgIsDebugging())
+        return;
+    clearAddressColor(rvaToVa(getSelectionStart()), rvaToVa(getSelectionEnd()));
+
+    GuiUpdateAllViews();
 }

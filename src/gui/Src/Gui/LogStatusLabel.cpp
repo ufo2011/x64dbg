@@ -1,7 +1,8 @@
 #include "LogStatusLabel.h"
 #include "LogView.h"
-#include <QTextDocument>
+#include <QAccessible>
 #include <QApplication>
+#include <QTextDocumentFragment>
 #include <QStatusBar>
 
 LogStatusLabel::LogStatusLabel(QStatusBar* parent) : QLabel(parent)
@@ -43,6 +44,15 @@ void LogStatusLabel::logUpdate(QString message, bool encodeHTML)
         }
     }
     setText(finalLabel);
+    // A status-bar label is passive and its automatic NameChanged event is not
+    // announced by Narrator. Send the explicit live ValueChanged notification
+    // and strip any rich-text markup from its payload.
+    if(QAccessible::isActive())
+    {
+        QAccessibleValueChangeEvent updateEvent(
+            this, QTextDocumentFragment::fromHtml(finalLabel).toPlainText());
+        QAccessible::updateAccessibility(&updateEvent);
+    }
 }
 
 void LogStatusLabel::logUpdateUtf8(QByteArray message)

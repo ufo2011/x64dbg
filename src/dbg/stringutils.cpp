@@ -1,8 +1,11 @@
 #include "stringutils.h"
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif // WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <cstdint>
 
-static inline bool convertLongLongNumber(const char* str, unsigned long long & result, int radix)
+bool StringUtils::convertLongLongNumber(const char* str, unsigned long long & result, int radix)
 {
     errno = 0;
     char* end;
@@ -16,7 +19,7 @@ static inline bool convertLongLongNumber(const char* str, unsigned long long & r
     return true;
 }
 
-static inline bool convertNumber(const char* str, size_t & result, int radix)
+bool StringUtils::convertNumber(const char* str, size_t & result, int radix)
 {
     unsigned long long llr;
     if(!convertLongLongNumber(str, llr, radix))
@@ -49,6 +52,33 @@ StringList StringUtils::Split(const String & s, char delim)
 {
     std::vector<String> elems;
     Split(s, delim, elems);
+    return elems;
+}
+
+void StringUtils::Split(const String & s, const String & delims, std::vector<String> & elems)
+{
+    elems.clear();
+    String item;
+    item.reserve(s.length());
+    for(size_t i = 0; i < s.length(); i++)
+    {
+        if(delims.find(s[i]) != String::npos)
+        {
+            if(!item.empty())
+                elems.push_back(item);
+            item.clear();
+        }
+        else
+            item.push_back(s[i]);
+    }
+    if(!item.empty())
+        elems.push_back(std::move(item));
+}
+
+StringList StringUtils::Split(const String & s, const String & delims)
+{
+    std::vector<String> elems;
+    Split(s, delims, elems);
     return elems;
 }
 

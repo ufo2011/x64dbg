@@ -233,10 +233,10 @@ static void HandleZydisOperand(const Zydis & zydis, int opindex, DISASM_ARGTYPE*
         const auto & mem = op.mem;
         if(mem.segment == ArchValue(ZYDIS_REGISTER_FS, ZYDIS_REGISTER_GS))
         {
-            *value += ThreadGetLocalBase(ThreadGetId(hActiveThread));
+            *value += ThreadGetLocalBase(GetDebugData()->dwThreadId);
         }
         *memorySize = op.size / 8;
-        if(*memorySize <= memoryContentSize && DbgMemIsValidReadPtr(*value))
+        if(op.size / 8 <= memoryContentSize && DbgMemIsValidReadPtr(*value))
         {
             MemRead(*value, memoryContent, std::max(op.size / 8, (int)sizeof(duint)));
         }
@@ -263,8 +263,8 @@ void TraceRecordManager::TraceExecuteRecord(const Zydis & newInstruction)
     duint newMemoryAddress[memoryArrayCount];
     duint oldMemory[memoryArrayCount];
     unsigned char newMemoryArrayCount = 0;
-    DbgGetRegDumpEx(&newContext.registers, sizeof(REGDUMP));
-    newThreadId = ThreadGetId(hActiveThread);
+    DbgGetRegDumpEx((REGDUMP_AVX512*)&newContext.registers, sizeof(REGDUMP)); //TODO: Migrate
+    newThreadId = GetDebugData()->dwThreadId;
     // Don't try to resolve memory values for invalid/lea/nop instructions
     if(newInstruction.Success() && !newInstruction.IsNop() && newInstruction.GetId() != ZYDIS_MNEMONIC_LEA)
     {
@@ -330,17 +330,19 @@ void TraceRecordManager::TraceExecuteRecord(const Zydis & newInstruction)
             if(rtOldContext.regword[i] != newContext.regword[i] || rtOldContextChanged[i] || ((rtRecordedInstructions - 1) % MAX_INSTRUCTIONS_TRACED_FULL_REG_DUMP == 0))
                 changed++;
         }
-        unsigned char blockFlags = 0;
-        if(newThreadId != rtOldThreadId || ((rtRecordedInstructions - 1) % MAX_INSTRUCTIONS_TRACED_FULL_REG_DUMP == 0))
-            blockFlags = 0x80;
+        const bool writeThreadId = newThreadId != rtOldThreadId
+                                   || rtNeedThreadId
+                                   || ((rtRecordedInstructions - 1) % MAX_INSTRUCTIONS_TRACED_FULL_REG_DUMP == 0);
+        unsigned char blockFlags = writeThreadId ? 0x80 : 0;
         blockFlags |= rtOldOpcodeSize;
 
-        WriteBufferPtr[0] = 0; //1byte: block type
+        unsigned char blockType = 0;
+        WriteBufferPtr[0] = blockType; //1byte: block type
         WriteBufferPtr[1] = changed; //1byte: registers changed
         WriteBufferPtr[2] = rtOldMemoryArrayCount; //1byte: memory accesses count
         WriteBufferPtr[3] = blockFlags; //1byte: flags and opcode size
         WriteBufferPtr += 4;
-        if(newThreadId != rtOldThreadId || rtNeedThreadId || ((rtRecordedInstructions - 1) % MAX_INSTRUCTIONS_TRACED_FULL_REG_DUMP == 0))
+        if(writeThreadId)
         {
             memcpy(WriteBufferPtr, &rtOldThreadId, sizeof(rtOldThreadId));
             WriteBufferPtr += sizeof(rtOldThreadId);
@@ -415,7 +417,7 @@ void TraceRecordManager::TraceExecuteRecord(const Zydis & newInstruction)
             {
                 CloseHandle(rtFile);
                 String error = stringformatinline(StringUtils::sprintf("{winerror@%x}", GetLastError()));
-                dprintf(QT_TRANSLATE_NOOP("DBG", "Trace recording has stopped unexpectedly because WriteFile() failed. GetLastError() = %s.\r\n"), error.c_str());
+                dprintf(QT_TRANSLATE_NOOP("DBG", "Trace recording has stopped unexpectedly because WriteFile() failed. GetLastError() = %s.\n"), error.c_str());
                 rtEnabled = false;
             }
         }
@@ -426,6 +428,23 @@ void TraceRecordManager::TraceExecuteRecord(const Zydis & newInstruction)
     rtRecordedInstructions++;
 
     dbgtracebrowserneedsupdate();
+}
+
+void TraceRecordManager::FlushTraceExecuteRecord()
+{
+    if(!rtEnabled || !rtPrevInstAvailable)
+        return;
+
+    // Trace records are written one instruction late, because the writer needs
+    // the next debug context to compute register and memory changes. When an
+    // exception stops execution there may be no next instruction, so finalize
+    // the pending instruction with the current exception context.
+    Zydis nextInstruction;
+    TraceExecuteRecord(nextInstruction);
+    rtPrevInstAvailable = false;
+    rtNeedThreadId = true;
+    for(size_t i = 0; i < _countof(rtOldContextChanged); i++)
+        rtOldContextChanged[i] = true;
 }
 
 unsigned int TraceRecordManager::getHitCount(duint address)
@@ -459,7 +478,7 @@ TraceRecordManager::TraceRecordByteType TraceRecordManager::getByteType(duint ad
     duint base = address & ~((duint)4096 - 1);
     auto pageInfoIterator = TraceRecord.find(ModHashFromAddr(base));
     if(pageInfoIterator == TraceRecord.end())
-        return TraceRecordByteType::InstructionHeading;
+        return TraceRecordByteType::Unknown;
     else
     {
         TraceRecordPage pageInfo = pageInfoIterator->second;
@@ -468,11 +487,18 @@ TraceRecordManager::TraceRecordByteType TraceRecordManager::getByteType(duint ad
         {
         case TraceRecordType::TraceRecordBitExec:
         default:
-            return TraceRecordByteType::InstructionHeading;
+            // bit type don't store byte type
+            return TraceRecordByteType::Unknown;
         case TraceRecordType::TraceRecordByteWithExecTypeAndCounter:
-            return (TraceRecordByteType)((((char*)pageInfo.rawPtr)[offset] & 0xC0) >> 6);
+            if((((char*)pageInfo.rawPtr)[offset] & 0x3F) != 0)
+                return (TraceRecordByteType)((((char*)pageInfo.rawPtr)[offset] & 0xC0) >> 6);
+            else
+                return TraceRecordByteType::Unknown;
         case TraceRecordType::TraceRecordWordWithExecTypeAndCounter:
-            return (TraceRecordByteType)((((short*)pageInfo.rawPtr)[offset] & 0xC000) >> 14);
+            if((((short*)pageInfo.rawPtr)[offset] & 0x3FFF) != 0)
+                return (TraceRecordByteType)((((short*)pageInfo.rawPtr)[offset] & 0xC000) >> 14);
+            else
+                return TraceRecordByteType::Unknown;
         }
     }
 }
@@ -546,7 +572,10 @@ bool TraceRecordManager::enableTraceRecording(bool enabled, const char* fileName
             rtNeedThreadId = true;
             for(size_t i = 0; i < _countof(rtOldContextChanged); i++)
                 rtOldContextChanged[i] = true;
-            dprintf(QT_TRANSLATE_NOOP("DBG", "Started trace recording to file: %s\r\n"), fileName);
+            dprintf(QT_TRANSLATE_NOOP("DBG", "Started trace recording to file: %s\n"), fileName);
+            PLUG_CB_STARTTRACE startTraceInfo{};
+            startTraceInfo.traceFilePath = fileName;
+            plugincbcall(CB_STARTTRACE, &startTraceInfo);
             Zydis zydis;
             unsigned char instr[MAX_DISASM_BUFFER];
             auto cip = GetContextDataEx(hActiveThread, UE_CIP);
@@ -561,7 +590,7 @@ bool TraceRecordManager::enableTraceRecording(bool enabled, const char* fileName
         else
         {
             String error = stringformatinline(StringUtils::sprintf("{winerror@%x}", GetLastError()));
-            dprintf(QT_TRANSLATE_NOOP("DBG", "Cannot create trace recording file. GetLastError() = %s.\r\n"), error.c_str());
+            dprintf(QT_TRANSLATE_NOOP("DBG", "Cannot create trace recording file. GetLastError() = %s.\n"), error.c_str());
             return false;
         }
     }
@@ -573,6 +602,9 @@ bool TraceRecordManager::enableTraceRecording(bool enabled, const char* fileName
             rtPrevInstAvailable = false;
             rtEnabled = false;
             dputs(QT_TRANSLATE_NOOP("DBG", "Trace recording stopped."));
+            PLUG_CB_STOPTRACE stopTraceInfo{};
+            stopTraceInfo.reserved = nullptr;
+            plugincbcall(CB_STOPTRACE, &stopTraceInfo);
         }
         return true;
     }

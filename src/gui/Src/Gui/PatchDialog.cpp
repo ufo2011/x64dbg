@@ -158,6 +158,9 @@ void PatchDialog::updatePatches()
     if(mPatches.size())
         ui->listModules->item(0)->setSelected(true); //select first module
 
+    // QListWidget can retain an explicitly hidden state after the dialog is closed
+    // with a patch selected. Make sure the refreshed list is shown again.
+    ui->listPatches->setVisible(true);
     mIsWorking = false;
 }
 
@@ -470,7 +473,7 @@ void PatchDialog::on_btnPatchFile_clicked()
     strcpy_s(szDirName, szModName);
     szDirName[len] = '\0';
 
-    QString filename = QFileDialog::getSaveFileName(this, tr("Save file"), szDirName, tr("All files (*.*)"));
+    QString filename = QFileDialog::getSaveFileName(this, tr("Save file"), szDirName);
     if(!filename.length())
         return;
     filename = QDir::toNativeSeparators(filename); //convert to native path format (with backlashes)
@@ -501,6 +504,7 @@ void PatchDialog::on_btnImport_clicked()
     {
         bool badoriginal;
         bool alreadypatched;
+        unsigned char actualbyte; // byte snapshot on import
     } IMPORTSTATUS;
     QList<QPair<DBGPATCHINFO, IMPORTSTATUS>> patchList;
     DBGPATCHINFO curPatch;
@@ -558,6 +562,7 @@ void PatchDialog::on_btnImport_clicked()
             IMPORTSTATUS status;
             status.alreadypatched = (checkbyte == newbyte);
             status.badoriginal = (checkbyte != oldbyte);
+            status.actualbyte = checkbyte;
             if(status.alreadypatched)
                 bAlreadyDone = true;
             else if(status.badoriginal)
@@ -606,7 +611,13 @@ void PatchDialog::on_btnImport_clicked()
         curPatch = patchList.at(i).first;
         if(bUndoPatched && patchList.at(i).second.alreadypatched)
         {
-            if(DbgFunctions()->MemPatch(curPatch.addr, &curPatch.oldbyte, 1))
+            unsigned char byteToWrite;
+            if(patchList.at(i).second.badoriginal)
+                byteToWrite = patchList.at(i).second.actualbyte;
+            else
+                byteToWrite = curPatch.oldbyte;
+
+            if(DbgFunctions()->MemPatch(curPatch.addr, &byteToWrite, 1))
                 patched++;
         }
         else

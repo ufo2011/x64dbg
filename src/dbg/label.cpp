@@ -1,4 +1,5 @@
 #include "label.h"
+#include "database_cb_batcher.h"
 
 struct LabelSerializer : AddrInfoSerializer<LABELSINFO>
 {
@@ -21,6 +22,17 @@ struct Labels : AddrInfoHashMap<LockLabels, LABELSINFO, LabelSerializer>
     const char* jsonKey() const override
     {
         return "labels";
+    }
+
+protected:
+    bool populateDbOperation(DbOperation & op, const LABELSINFO & value) const override
+    {
+        op.itemType = DbItemTypeLabel;
+        op.manual = value.manual;
+        op.modhash = value.modhash;
+        op.address = value.addr;
+        op.label.text = value.text.c_str();
+        return true;
     }
 };
 
@@ -106,6 +118,7 @@ bool LabelDelete(duint Address)
 
 void LabelDelRange(duint Start, duint End, bool Manual)
 {
+    DbCallbackBatcher batcher;
     labels.DeleteRange(Start, End, Manual);
     if(Start == 0 && End == ~0)
     {
@@ -130,13 +143,15 @@ void LabelCacheSave(JSON Root)
 
 void LabelCacheLoad(JSON Root)
 {
+    DbCallbackBatcher batcher(true);
     labels.CacheLoad(Root);
     labels.CacheLoad(Root, "auto"); //legacy support
 }
 
-void LabelClear()
+void LabelClear(bool Terminating)
 {
-    labels.Clear();
+    DbCallbackBatcher batcher;
+    labels.Clear(Terminating);
     tempLabels.clear();
 }
 
@@ -161,4 +176,29 @@ bool LabelGetInfo(duint Address, LABELSINFO* info)
         return false;
 
     return labels.Get(Labels::VaKey(Address), *info);
+}
+
+std::vector<std::string> LabelFindPrefix(const std::string & prefix, int maxCount, bool isCaseSensitive)
+{
+    std::vector<std::string> outputs;
+    auto cmp = isCaseSensitive ? strncmp : _strnicmp;
+    size_t prefixSize = prefix.size();
+
+    labels.GetWhere([&](const LABELSINFO & value)
+    {
+        if((int)outputs.size() >= maxCount)
+        {
+            return true;
+        }
+        if(cmp(prefix.c_str(), value.text.c_str(), prefixSize) != 0)
+        {
+            return false;
+        }
+        outputs.push_back(value.text);
+
+        // continue to search all labels
+        return false;
+    });
+
+    return outputs;
 }

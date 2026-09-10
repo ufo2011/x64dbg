@@ -16,6 +16,7 @@
 #include "StringUtil.h"
 #include "MiscUtil.h"
 #include <QMainWindow>
+#include <QPdfWriter>
 
 DisassemblerGraphView::DisassemblerGraphView(Architecture* architecture, QWidget* parent)
     : QAbstractScrollArea(parent),
@@ -355,15 +356,14 @@ void DisassemblerGraphView::paintNormal(QPainter & p, QRect & viewportRect, int 
                         auto selected = instr.addr == this->cur_instr;
                         auto traceCount = dbgfunctions->GetTraceRecordHitCount(instr.addr);
 
+                        QColor backgroundColor = disassemblyBackgroundColor;
                         if(selected && traceCount)
                         {
-                            p.fillRect(QRect(block.x + this->charWidth + 3, y, block.width - (10 + 2 * this->charWidth),
-                                             int(instr.text.lines.size()) * this->charHeight), disassemblyTracedSelectionColor);
+                            backgroundColor = disassemblyTracedSelectionColor;
                         }
                         else if(selected)
                         {
-                            p.fillRect(QRect(block.x + this->charWidth + 3, y, block.width - (10 + 2 * this->charWidth),
-                                             int(instr.text.lines.size()) * this->charHeight), disassemblySelectionColor);
+                            backgroundColor = disassemblySelectionColor;
                         }
                         else if(traceCount)
                         {
@@ -377,11 +377,25 @@ void DisassemblerGraphView::paintNormal(QPainter & p, QRect & viewportRect, int 
                             if(disassemblyTracedColor.blue() > 160)
                                 colorDiff *= -1;
 
-                            p.fillRect(QRect(block.x + this->charWidth + 3, y, block.width - (10 + 2 * this->charWidth), int(instr.text.lines.size()) * this->charHeight),
-                                       QColor(disassemblyTracedColor.red(),
-                                              disassemblyTracedColor.green(),
-                                              std::max(0, std::min(256, disassemblyTracedColor.blue() + colorDiff))));
+                            backgroundColor = QColor(disassemblyTracedColor.red(),
+                                                     disassemblyTracedColor.green(),
+                                                     std::max(0, std::min(256, disassemblyTracedColor.blue() + colorDiff)));
                         }
+
+                        unsigned int linePreset;
+                        if(DbgGetAddressColorAt(instr.addr, &linePreset) && linePreset < mAddressColorPresets.size())
+                        {
+                            const QColor & color = mAddressColorPresets[linePreset];
+                            backgroundColor = QColor(
+                                                  (backgroundColor.red()   * (255 - color.alpha()) + color.red()   * color.alpha()) / 255,
+                                                  (backgroundColor.green() * (255 - color.alpha()) + color.green() * color.alpha()) / 255,
+                                                  (backgroundColor.blue()  * (255 - color.alpha()) + color.blue()  * color.alpha()) / 255,
+                                                  backgroundColor.alpha()
+                                              );
+                        }
+
+                        p.fillRect(QRect(block.x + this->charWidth + 3, y, block.width - (10 + 2 * this->charWidth),
+                                         int(instr.text.lines.size()) * this->charHeight), backgroundColor);
                     }
                     y += int(instr.text.lines.size()) * this->charHeight;
                 }
@@ -672,15 +686,14 @@ void DisassemblerGraphView::paintZoom(QPainter & p, QRect & viewportRect, int xo
                             auto selected = instr.addr == this->cur_instr;
                             auto traceCount = dbgfunctions->GetTraceRecordHitCount(instr.addr);
 
+                            QColor backgroundColor = disassemblyBackgroundColor;
                             if(selected && traceCount)
                             {
-                                p.fillRect(QRect(block.x + this->charWidth + 3, y, block.width - (10 + 2 * this->charWidth),
-                                                 int(instr.text.lines.size()) * this->charHeight), disassemblyTracedSelectionColor);
+                                backgroundColor = disassemblyTracedSelectionColor;
                             }
                             else if(selected)
                             {
-                                p.fillRect(QRect(block.x + this->charWidth + 3, y, block.width - (10 + 2 * this->charWidth),
-                                                 int(instr.text.lines.size()) * this->charHeight), disassemblySelectionColor);
+                                backgroundColor = disassemblySelectionColor;
                             }
                             else if(traceCount)
                             {
@@ -694,11 +707,25 @@ void DisassemblerGraphView::paintZoom(QPainter & p, QRect & viewportRect, int xo
                                 if(disassemblyTracedColor.blue() > 160)
                                     colorDiff *= -1;
 
-                                p.fillRect(QRect(block.x + this->charWidth + 3, y, block.width - (10 + 2 * this->charWidth), int(instr.text.lines.size()) * this->charHeight),
-                                           QColor(disassemblyTracedColor.red(),
-                                                  disassemblyTracedColor.green(),
-                                                  std::max(0, std::min(256, disassemblyTracedColor.blue() + colorDiff))));
+                                backgroundColor = QColor(disassemblyTracedColor.red(),
+                                                         disassemblyTracedColor.green(),
+                                                         std::max(0, std::min(256, disassemblyTracedColor.blue() + colorDiff)));
                             }
+
+                            unsigned int linePreset;
+                            if(DbgGetAddressColorAt(instr.addr, &linePreset) && linePreset < mAddressColorPresets.size())
+                            {
+                                const QColor & color = mAddressColorPresets[linePreset];
+                                backgroundColor = QColor(
+                                                      (backgroundColor.red()   * (255 - color.alpha()) + color.red()   * color.alpha()) / 255,
+                                                      (backgroundColor.green() * (255 - color.alpha()) + color.green() * color.alpha()) / 255,
+                                                      (backgroundColor.blue()  * (255 - color.alpha()) + color.blue()  * color.alpha()) / 255,
+                                                      backgroundColor.alpha()
+                                                  );
+                            }
+
+                            p.fillRect(QRect(block.x + this->charWidth + 3, y, block.width - (10 + 2 * this->charWidth),
+                                             int(instr.text.lines.size()) * this->charHeight), backgroundColor);
                         }
                         y += int(instr.text.lines.size()) * this->charHeight;
                     }
@@ -2331,6 +2358,7 @@ void DisassemblerGraphView::setupContextMenu()
     mToggleSummary->setCheckable(true);
     mMenuBuilder->addAction(mToggleSyncOrigin = makeShortcutAction(DIcon("lock"), tr("&Sync with %1").arg(ArchValue("EIP", "RIP")), SLOT(toggleSyncOriginSlot()), "ActionSync"));
     mMenuBuilder->addAction(makeShortcutAction(DIcon("sync"), tr("&Refresh"), SLOT(refreshSlot()), "ActionRefresh"));
+    mMenuBuilder->addAction(makeShortcutAction(DIcon("image"), tr("Copy image"), SLOT(copyImageSlot()), "ActionGraphCopyImage"));
     mMenuBuilder->addAction(makeShortcutAction(DIcon("image"), tr("&Save as image"), SLOT(saveImageSlot()), "ActionGraphSaveImage"));
 
     MenuBuilder* layoutMenu = new MenuBuilder(this);
@@ -2424,6 +2452,19 @@ void DisassemblerGraphView::colorsUpdatedSlot()
     mLabelBackgroundColor = ConfigColor("DisassemblyLabelBackgroundColor");
     mAddressColor = ConfigColor("DisassemblyAddressColor");
     mAddressBackgroundColor = ConfigColor("DisassemblyAddressBackgroundColor");
+    duint addressColorCount = ConfigUint("Colors", "AddressColorCount");
+    duint addressColorAlpha = ConfigUint("Colors", "AddressColorAlpha");
+    mAddressColorPresets.assign(addressColorCount + 1, QColor(Qt::transparent));
+    for(duint i = 0; i < addressColorCount; i++)
+    {
+        char addressColor[MAX_SETTING_SIZE] = "";
+        if(BridgeSettingGet("Colors", QString("AddressColor%1").arg(i).toUtf8().constData(), addressColor))
+        {
+            QColor color = QColor(addressColor);
+            color.setAlpha(addressColorAlpha);
+            mAddressColorPresets[i + 1] = color;
+        }
+    }
 
     jmpColor = ConfigColor("GraphJmpColor");
     brtrueColor = ConfigColor("GraphBrtrueColor");
@@ -2546,17 +2587,13 @@ void DisassemblerGraphView::refreshSlot()
     DbgCmdExec(QString("graph %1, force").arg(ToPtrString(this->cur_instr)));
 }
 
-void DisassemblerGraphView::saveImageSlot()
+void DisassemblerGraphView::paintImage(QPainter* painter)
 {
     //this->viewport()->update();
 
     //TODO: speed up large graph saving or show gif loader so it won't look like it has crashed
 
     //Image corresponds to the current zoom level
-    QString path = QFileDialog::getSaveFileName(this, tr("Save as image"), "", tr("PNG file (*.png);;WebP file (*.webp);;BMP file (*.bmp);;TIFF file (*.tif)"));
-    if(path.isEmpty())
-        return;
-
     QSize size = this->viewport()->size();
     QPoint scrollbarPos = QPoint(this->horizontalScrollBar()->value(), this->verticalScrollBar()->value());
 
@@ -2569,29 +2606,64 @@ void DisassemblerGraphView::saveImageSlot()
     }
 
     //save viewport to image
-    auto scaleFactor = this->devicePixelRatioF();
-    QRect completeRenderRect = QRect(0, 0, this->renderWidth * scaleFactor, this->renderHeight * scaleFactor);
-    QImage img(completeRenderRect.size(), QImage::Format_ARGB32);
+    viewport()->render(painter);
+
+    //restore changes made to viewport for full render saving
+    viewport()->resize(size);
+
+    if(graphZoomMode)
+    {
+        horizontalScrollBar()->setValue(scrollbarPos.x());
+        verticalScrollBar()->setValue(scrollbarPos.y());
+    }
+}
+
+QImage DisassemblerGraphView::getImage()
+{
+    auto scaleFactor = devicePixelRatioF();
+    QSize completeRenderRect = QSize(renderWidth * scaleFactor, renderHeight * scaleFactor);
+    QImage img(completeRenderRect, QImage::Format_ARGB32);
     img.setDevicePixelRatio(scaleFactor);
     QPainter painter(&img);
-    this->viewport()->render(&painter);
+    paintImage(&painter);
+    return img;
+}
+
+void DisassemblerGraphView::saveImageSlot()
+{
+    QString path = QFileDialog::getSaveFileName(this, tr("Save as image"), "", tr("PNG file (*.png);;WebP lossless file (*.webp);;BMP file (*.bmp);;TIFF file (*.tif);;PDF file (*.pdf)"));
+    if(path.isEmpty())
+        return;
+
+    if(path.endsWith(".pdf", Qt::CaseInsensitive))
+    {
+        QPdfWriter pdf(path);
+        pdf.setCreator(QApplication::applicationDisplayName());
+        pdf.setPageSize(QPageSize(QSizeF(renderWidth, renderHeight), QPageSize::Point));
+        pdf.setResolution(72.0);
+        pdf.setTitle(getSymbolicName(currentGraph.entryPoint));
+        pdf.setPageMargins(QMarginsF(0.0, 0.0, 0.0, 0.0));
+        QPainter painter(&pdf);
+        paintImage(&painter);
+        return;
+    }
+    QImage img = getImage();
     bool success;
     if(!path.endsWith(".webp", Qt::CaseInsensitive))
         success = img.save(path);
     else
         success = img.save(path, nullptr, 100); //WebP needs this to save in lossless format. But this makes PNG larger than BMP.
 
-    //restore changes made to viewport for full render saving
-    this->viewport()->resize(size);
-
-    if(graphZoomMode)
-    {
-        this->horizontalScrollBar()->setValue(scrollbarPos.x());
-        this->verticalScrollBar()->setValue(scrollbarPos.y());
-    }
-
     if(!success)
         SimpleErrorBox(this, tr("Error"), tr("Image saving failed!"));
+}
+
+void DisassemblerGraphView::copyImageSlot()
+{
+    QImage img = getImage();
+
+    QClipboard* clipboard = QApplication::clipboard();
+    clipboard->setImage(img);
 }
 
 void DisassemblerGraphView::xrefSlot()

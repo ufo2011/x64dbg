@@ -4,6 +4,7 @@
 #include "memory.h"
 #include "recursiveanalysis.h"
 #include "function.h"
+#include "module.h"
 #include "stringformat.h"
 #include "value.h"
 #include "variable.h"
@@ -121,42 +122,65 @@ bool cbDebugMemmapdump(int argc, char* argv[])
 bool cbInstrGraph(int argc, char* argv[])
 {
     auto options = argc > 2 ? argv[2] : "";
-    auto force = !!strstr(options, "force");
+    auto forceRefresh = !!strstr(options, "force");
     auto silent = !!strstr(options, "silent");
-    duint entry;
-    if(argc < 2 || !valfromstring(argv[1], &entry))
-        entry = GetContextDataEx(hActiveThread, UE_CIP);
-    duint start, size, sel = entry;
-    if(FunctionGet(entry, &start))
-        entry = start;
-    auto base = MemFindBaseAddr(entry, &size);
-    if(!base || !MemIsValidReadPtr(entry))
+    duint userSelection = 0;
+    if(argc < 2 || !valfromstring(argv[1], &userSelection))
+        userSelection = GetContextDataEx(hActiveThread, UE_CIP);
+
+    // Find (heuristic) function entry point from user selection (0 if it cannot be determined)
+    const auto functionEntry = std::invoke([userSelection]
+    {
+        duint start = 0;
+        if(FunctionGet(userSelection, &start))
+            return start;
+        return ModFunctionEntryGuessFromAddr(userSelection);
+    });
+
+    // Navigate to user selection in the current graph, get cached graph entry point
+    const auto cachedEntry = GuiGraphAt(userSelection);
+
+    // Reuse the cached graph when the selection is inside it, unless the selection
+    // confidently belongs to a different function entry
+    const auto cacheInvalidated = cachedEntry == 0 || (functionEntry != 0 && cachedEntry != functionEntry);
+
+    // Rebuild the graph from the function entry, falling back to the cached entry
+    // (relevant for a forced refresh) and finally the user selection
+    const auto graphEntry = functionEntry != 0 ? functionEntry : (cachedEntry != 0 ? cachedEntry : userSelection);
+
+    // Make sure the address is valid
+    duint size = 0;
+    auto base = MemFindBaseAddr(graphEntry, &size);
+    if(!base || !MemIsValidReadPtr(graphEntry))
     {
         if(!silent)
-            dprintf(QT_TRANSLATE_NOOP("DBG", "Invalid address %p!\n"), entry);
+            dprintf(QT_TRANSLATE_NOOP("DBG", "Invalid address %p!\n"), graphEntry);
         return false;
     }
-    auto curEntry = GuiGraphAt(sel);
-    if(curEntry)
-        entry = curEntry;
-    if(!curEntry || force)
+
+    if(forceRefresh || cacheInvalidated)
     {
-        auto modbase = ModBaseFromAddr(base);
-        if(modbase)
-            base = modbase, size = ModSizeFromAddr(modbase);
-        RecursiveAnalysis analysis(base, size, entry, true);
+        const auto modbase = ModBaseFromAddr(base);
+        if(modbase != 0)
+        {
+            base = modbase;
+            size = ModSizeFromAddr(modbase);
+        }
+
+        RecursiveAnalysis analysis(base, size, graphEntry, true);
         analysis.Analyse();
-        auto graph = analysis.GetFunctionGraph(entry);
-        if(!graph)
+        auto graph = analysis.GetFunctionGraph(graphEntry);
+        if(graph == nullptr)
         {
             if(!silent)
                 dputs(QT_TRANSLATE_NOOP("DBG", "No graph generated..."));
             return false;
         }
         auto graphList = graph->ToGraphList();
-        if(!GuiLoadGraph(&graphList, sel))
+        if(!GuiLoadGraph(&graphList, userSelection))
             return false;
     }
+
     GuiUpdateAllViews();
     if(!silent)
         GuiFocusView(GUI_GRAPH);

@@ -1,9 +1,9 @@
 #pragma once
 
 #include "AbstractTableView.h"
-#include "QZydis.h"
+#include <Disassembler/QZydis.h>
 #include <QTextLayout>
-#include "Architecture.h"
+#include <Disassembler/Architecture.h>
 
 class CodeFoldingHelper;
 class MemoryPage;
@@ -83,7 +83,7 @@ public:
     QList<Instruction_t>* instructionsBuffer(); // ugly
     const duint baseAddress() const;
 
-    QString getAddrText(duint cur_addr, QString & label, bool getLabel = true);
+    QString getAddrText(duint cur_addr, QString & label, bool getLabel = true) const;
     void prepareDataCount(const QList<duint> & rvas, QList<Instruction_t>* instBuffer);
     void prepareDataRange(duint startRva, duint endRva, const std::function<bool(int, const Instruction_t &)> & disassembled);
     RichTextPainter::List getRichBytes(const Instruction_t & instr, bool isSelected) const;
@@ -95,6 +95,9 @@ public:
     bool isHighlightMode() const;
     bool followInstruction(duint rva);
 
+    //color
+    void setAddressColor(duint vaStart, duint vaEnd, unsigned int color);
+    void clearAddressColor(duint vaStart, duint vaEnd);
 signals:
     void selectionChanged(duint va);
     void selectionExpanded();
@@ -160,18 +163,19 @@ private:
     QList<HistoryData> mVaHistory;
     int mCurrentVa;
 
+    DisassemblyPopup* mDisassemblyPopup = nullptr;
+
+protected:
+
     enum
     {
         ColAddress,
         ColBytes,
         ColDisassembly,
-        ColComment,
         ColMnemonicBrief,
+        ColComment,
     };
 
-    DisassemblyPopup* mDisassemblyPopup = nullptr;
-
-protected:
     // Jumps Graphic
     int paintJumpsGraphic(QPainter* painter, int x, int y, const Instruction_t & instruction);
 
@@ -240,6 +244,8 @@ protected:
     QColor mLoopColor;
     QColor mFunctionColor;
 
+    std::vector<QColor> mAddressColorPresets;
+
     QPen mLoopPen;
     QPen mFunctionPen;
     QPen mUnconditionalPen;
@@ -247,9 +253,14 @@ protected:
     QPen mConditionalFalsePen;
 
     // Misc
-    bool mRvaDisplayEnabled;
+    enum RvaDisplayMode
+    {
+        RvaDisplayDisabled = 0,
+        RvaDisplayRelative,
+        RvaDisplayModule,
+    };
+    RvaDisplayMode mRvaDisplayMode = RvaDisplayDisabled;
     duint mRvaDisplayBase;
-    dsint mRvaDisplayPageBase;
     bool mHighlightingMode;
     MemoryPage* mMemPage;
     QZydis* mDisasm;
@@ -278,4 +289,6 @@ protected:
 
     void paintRichText(int x, int y, int w, int h, int xinc, const RichTextPainter::List & richText, int rowOffset, int column);
     void paintRichText(int x, int y, int w, int h, int xinc, RichTextPainter::List && richText, int rowOffset, int column);
+    friend class AccessibleDisassembly;
+    int accessibilitySelectedRow() const override;
 };

@@ -26,6 +26,7 @@
 #include "filemap.h"
 #include "debugger.h"
 #include "stringformat.h"
+#include "addresscolor.h"
 
 /**
 \brief Directory where program databases are stored (usually in \db). UTF-8 encoding.
@@ -61,6 +62,7 @@ void DbSave(DbLoadSaveType saveType, const char* dbfile, bool disablecompression
 
     if(saveType == DbLoadSaveType::DebugData || saveType == DbLoadSaveType::All)
     {
+        AddressColorCacheSave(root);
         CommentCacheSave(root);
         LabelCacheSave(root);
         BookmarkCacheSave(root);
@@ -145,7 +147,7 @@ void DbSave(DbLoadSaveType saveType, const char* dbfile, bool disablecompression
             return;
         }
 
-        if(!disablecompression && !settingboolget("Engine", "DisableDatabaseCompression"))
+        if(!disablecompression && !settingboolget("Engine", "DisableDatabaseCompression", false))
             LZ4_compress_fileW(wdbpath.c_str(), wdbpath.c_str());
     }
     else //remove database when nothing is in there
@@ -221,7 +223,7 @@ void DbLoad(DbLoadSaveType loadType, const char* dbfile)
     }
 
     // Decompress the file if compression was enabled
-    bool useCompression = !settingboolget("Engine", "DisableDatabaseCompression");
+    bool useCompression = !settingboolget("Engine", "DisableDatabaseCompression", false);
     LZ4_STATUS lzmaStatus = LZ4_INVALID_ARCHIVE;
     {
         lzmaStatus = LZ4_decompress_fileW(databasePathW.c_str(), databasePathW.c_str());
@@ -274,6 +276,7 @@ void DbLoad(DbLoadSaveType loadType, const char* dbfile)
             dbhash = 0;
 
         // Finally load all structures
+        AddressColorCacheLoad(root);
         CommentCacheLoad(root);
         LabelCacheLoad(root);
         BookmarkCacheLoad(root);
@@ -332,18 +335,19 @@ void DbClose()
 
 void DbClear(bool terminating)
 {
-    CommentClear();
-    LabelClear();
-    BookmarkClear();
-    FunctionClear();
-    ArgumentClear();
-    LoopClear();
-    XrefClear();
-    EncodeMapClear();
+    AddressColorClear(terminating);
+    CommentClear(terminating);
+    LabelClear(terminating);
+    BookmarkClear(terminating);
+    FunctionClear(terminating);
+    ArgumentClear(terminating);
+    LoopClear(terminating);
+    XrefClear(terminating);
+    EncodeMapClear(terminating);
     TraceRecord.clear();
-    BpClear();
-    ModCacheClear();
-    WatchClear();
+    BpClear(terminating);
+    ModCacheClear(terminating);
+    WatchClear(terminating);
     GuiSetDebuggeeNotes("");
 
     if(terminating)
@@ -424,7 +428,7 @@ void DbSetPath(const char* Directory, const char* ModulePath)
             return true;
         };
 
-        if(settingboolget("Engine", "SaveDatabaseInProgramDirectory") && checkWritable(fileDir))
+        if(settingboolget("Engine", "SaveDatabaseInProgramDirectory", false) && checkWritable(fileDir))
         {
             // Absolute path in the program directory
             sprintf_s(dbpath, "%s\\%s.%s", fileDir, dbName, dbType);

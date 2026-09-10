@@ -113,8 +113,8 @@ void LogView::setupContextMenu()
     actionAutoScroll->setCheckable(true);
     actionAutoScroll->setChecked(autoScroll);
     actionFindInLog = setupAction(tr("Find"), this, SLOT(findInLogSlot()));
-    actionFindNext = setupAction(tr("Find Next Occurance"), this, SLOT(findNextInLogSlot()));;
-    actionFindPrevious = setupAction(tr("Find Previous Occurance"), this, SLOT(findPreviousInLogSlot()));
+    actionFindNext = setupAction(tr("Find Next Occurence"), this, SLOT(findNextInLogSlot()));;
+    actionFindPrevious = setupAction(tr("Find Previous Occurence"), this, SLOT(findPreviousInLogSlot()));
 
     refreshShortcutsSlot();
     connect(Config(), SIGNAL(shortcutsUpdated()), this, SLOT(refreshShortcutsSlot()));
@@ -358,7 +358,15 @@ void LogView::addMsgToLogSlotRaw(QByteArray msg, bool encodeHTML)
         msgUtf16.append(tr("fwrite() failed (GetLastError()= %1 ). Log redirection stopped.\n").arg(GetLastError()));
 
     if(logBuffer.length() >= MAX_LOG_BUFFER_SIZE)
+    {
+        auto warning = tr("warning: pending GUI log buffer reached %1 bytes, dropping buffered messages.\n").arg(logBuffer.length());
+        auto warningHtml = warning.toHtmlEscaped();
+        warningHtml.replace(QChar(' '), QString("&nbsp;"));
+        warningHtml.replace(QChar('\n'), QString("<br/>\n"));
+
         logBuffer.clear();
+        logBuffer.append(warningHtml);
+    }
 
     logBuffer.append(msgUtf16);
     if(flushLog)
@@ -404,8 +412,8 @@ void LogView::redirectLogToFileSlot(QString filename)
         logRedirection = nullptr;
         GuiAddLogMessage(tr("Log redirection is stopped.\n").toUtf8().constData());
     }
-    logRedirection = _wfopen(filename.toStdWString().c_str(), L"ab");
-    if(logRedirection == nullptr)
+    errno_t err = _wfopen_s(&logRedirection, filename.toStdWString().c_str(), L"ab");
+    if(err != 0 || logRedirection == nullptr)
         GuiAddLogMessage(tr("_wfopen() failed. Log will not be redirected to %1.\n").arg(QString::fromWCharArray(BridgeUserDirectory())).toUtf8().constData());
     else
     {

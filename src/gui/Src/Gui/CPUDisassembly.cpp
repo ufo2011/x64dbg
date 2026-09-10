@@ -84,28 +84,30 @@ void CPUDisassembly::mouseDoubleClickEvent(QMouseEvent* event)
         return;
     switch(getColumnIndexFromX(event->x()))
     {
-    case 0: //address
+    case ColAddress: //address
     {
         dsint mSelectedVa = rvaToVa(getInitialSelection());
-        if(mRvaDisplayEnabled && mSelectedVa == mRvaDisplayBase)
-            mRvaDisplayEnabled = false;
-        else
+        // Cycle: Disabled -> Relative -> Module -> Disabled
+        if(mRvaDisplayMode == RvaDisplayDisabled || mSelectedVa != mRvaDisplayBase)
         {
-            mRvaDisplayEnabled = true;
+            mRvaDisplayMode = RvaDisplayRelative;
             mRvaDisplayBase = mSelectedVa;
-            mRvaDisplayPageBase = getBase();
         }
+        else if(mRvaDisplayMode == RvaDisplayRelative)
+            mRvaDisplayMode = RvaDisplayModule;
+        else
+            mRvaDisplayMode = RvaDisplayDisabled;
         reloadData();
     }
     break;
 
     // (Opcodes) Set INT3 breakpoint
-    case 1:
+    case ColBytes:
         mCommonActions->toggleInt3BPActionSlot();
         break;
 
     // (Disassembly) Assemble dialog
-    case 2:
+    case ColDisassembly:
     {
         duint assembleOnDoubleClickInt;
         bool assembleOnDoubleClick = (BridgeSettingGetUint("Disassembler", "AssembleOnDoubleClick", &assembleOnDoubleClickInt) && assembleOnDoubleClickInt);
@@ -121,7 +123,7 @@ void CPUDisassembly::mouseDoubleClickEvent(QMouseEvent* event)
     break;
 
     // (Comments) Set comment dialog
-    case 3:
+    case ColComment:
         mCommonActions->setCommentSlot();
         break;
 
@@ -202,7 +204,7 @@ void CPUDisassembly::setupFollowReferenceMenu(duint va, QMenu* menu, bool isRefe
                         {
                             int index;
                             for(index = 0; index < 512; index++)
-                                if(!DbgFunctions()->MemIsCodePage(switchTable[index], false))
+                                if(!DbgFunctions()->MemIsCodePage(switchTable[index], true))
                                     break;
                             if(index >= 2 && index < 512)
                                 for(int index2 = 0; index2 < index; index2++)
@@ -300,7 +302,7 @@ void CPUDisassembly::setupRightClickContextMenu()
     copyMenu->addAction(makeShortcutAction(DIcon("copy_address"), tr("&RVA"), SLOT(copyRvaSlot()), "ActionCopyRva"));
     copyMenu->addAction(makeShortcutAction(DIcon("fileoffset"), tr("&File Offset"), SLOT(copyFileOffsetSlot()), "ActionCopyFileOffset"));
     copyMenu->addAction(makeAction(tr("&Header VA"), SLOT(copyHeaderVaSlot())));
-    copyMenu->addAction(makeAction(DIcon("copy_disassembly"), tr("Disassembly"), SLOT(copyDisassemblySlot())));
+    copyMenu->addAction(makeShortcutAction(DIcon("copy_disassembly"), tr("Disassembly"), SLOT(copyDisassemblySlot()), "ActionCopyDisassembly"));
     copyMenu->addBuilder(new MenuBuilder(this, [this](QMenu * menu)
     {
         QSet<QString> labels;
@@ -368,6 +370,21 @@ void CPUDisassembly::setupRightClickContextMenu()
     mMenuBuilder->addAction(makeShortcutAction(DIcon("highlight"), tr("&Highlighting mode"), SLOT(enableHighlightingModeSlot()), "ActionHighlightingMode"));
     mMenuBuilder->addAction(makeAction(tr("Edit columns..."), SLOT(editColumnDialog())));
 
+    duint addressColorCount = ConfigUint("Colors", "AddressColorCount");
+    MenuBuilder* colorMenu = new MenuBuilder(this);
+    for(duint i = 0; i < addressColorCount; i++)
+    {
+        char addressColor[MAX_SETTING_SIZE] = "";
+        if(BridgeSettingGet("Colors", QString("AddressColor%1").arg(i).toUtf8().constData(), addressColor))
+        {
+            QAction* action = makeActionColor(QColor(addressColor), SLOT(setAddressColorSlot()));
+            action->setData(uint(i + 1));
+            colorMenu->addAction(action);
+        }
+    }
+    colorMenu->addAction(makeAction(DIcon("eraser"), tr("Clear"), SLOT(clearAddressColorSlot())));
+    mMenuBuilder->addMenu(makeMenu(DIcon("color-swatches"), tr("Color")), colorMenu);
+
     MenuBuilder* labelMenu = new MenuBuilder(this);
     labelMenu->addAction(makeShortcutAction(tr("Label Current Address"), SLOT(setLabelSlot()), "ActionSetLabel"));
     QAction* labelAddress = makeShortcutAction(tr("Label"), SLOT(setLabelAddressSlot()), "ActionSetLabelOperand");
@@ -395,9 +412,10 @@ void CPUDisassembly::setupRightClickContextMenu()
     mCommonActions->build(mMenuBuilder, CommonActions::ActionComment | CommonActions::ActionBookmark);
 
     QAction* traceCoverageDisable = makeAction(DIcon("close-all-tabs"), tr("Disable"), SLOT(traceCoverageDisableSlot()));
-    QAction* traceCoverageEnableBit = makeAction(DIcon("bit"), tr("Bit"), SLOT(traceCoverageBitSlot()));
-    QAction* traceCoverageEnableByte = makeAction(DIcon("byte"), tr("Byte"), SLOT(traceCoverageByteSlot()));
-    QAction* traceCoverageEnableWord = makeAction(DIcon("word"), tr("Word"), SLOT(traceCoverageWordSlot()));
+    QAction* traceCoverageEnableBit = makeDescAction(DIcon("bit"), tr("Mark covered (yes/no)"), tr("Enable trace coverage with 1 bit (whether an instruction was executed or not)"), SLOT(traceCoverageBitSlot()));
+    QAction* traceCoverageEnableByte = makeDescAction(DIcon("byte"), tr("Count hits (up to 63)"), tr("Enable trace coverage with 1 byte per byte of code to record how many times an instruction has been executed, enable hit count up to 63 and accurate run trace assisted disassembly."), SLOT(traceCoverageByteSlot()));
+    QAction* traceCoverageEnableWord = makeDescAction(DIcon("word"), tr("Count hits (up to 16383)"), tr("Enable trace coverage with 2 bytes per byte of code to record how many times an instruction has been executed, enable hit count up to 16383 and accurate run trace assisted disassembly."), SLOT(traceCoverageWordSlot()));
+    QAction* traceCoverageReset = makeAction(tr("Reset trace coverage"), SLOT(traceCoverageResetSlot()));
     QAction* traceCoverageToggleTraceRecording = makeShortcutAction(DIcon("control-record"), tr("Start trace recording"), SLOT(traceCoverageToggleTraceRecordingSlot()), "ActionToggleRunTrace");
     mMenuBuilder->addMenu(makeMenu(DIcon("trace"), tr("Trace coverage")), [ = ](QMenu * menu)
     {
@@ -408,7 +426,10 @@ void CPUDisassembly::setupRightClickContextMenu()
             menu->addAction(traceCoverageEnableWord);
         }
         else
+        {
+            menu->addAction(traceCoverageReset);
             menu->addAction(traceCoverageDisable);
+        }
         menu->addSeparator();
         if(TraceBrowser::isRecording())
         {
@@ -464,25 +485,25 @@ void CPUDisassembly::setupRightClickContextMenu()
     const char* strTable[] = {"Code", "Byte", "Word", "Dword", "Fword", "Qword", "Tbyte", "Oword", nullptr,
                               "Float", "Double", "Long Double", nullptr,
                               "ASCII", "UNICODE", nullptr,
-                              "MMWord", "XMMWord", "YMMWord"
+                              "MMWord", "XMMWord", "YMMWord", "ZMMWord"
                              };
 
     const char* shortcutTable[] = {"Code", "Byte", "Word", "Dword", "Fword", "Qword", "Tbyte", "Oword", nullptr,
                                    "Float", "Double", "LongDouble", nullptr,
                                    "ASCII", "UNICODE", nullptr,
-                                   "MMWord", "XMMWord", "YMMWord"
+                                   "MMWord", "XMMWord", "YMMWord", "ZMMWord"
                                   };
 
     const char* iconTable[] = {"cmd", "byte", "word", "dword", "fword", "qword", "tbyte", "oword", nullptr,
                                "float", "double", "longdouble", nullptr,
                                "ascii", "unicode", nullptr,
-                               "mmword", "xmm", "ymm"
+                               "mmword", "xmm", "ymm", "zmm"
                               };
 
     ENCODETYPE enctypeTable[] = {enc_code, enc_byte, enc_word, enc_dword, enc_fword, enc_qword, enc_tbyte, enc_oword, enc_middle,
                                  enc_real4, enc_real8, enc_real10, enc_middle,
                                  enc_ascii, enc_unicode, enc_middle,
-                                 enc_mmword, enc_xmmword, enc_ymmword
+                                 enc_mmword, enc_xmmword, enc_ymmword, enc_zmmword
                                 };
 
     int enctypesize = sizeof(enctypeTable) / sizeof(ENCODETYPE);
@@ -499,7 +520,7 @@ void CPUDisassembly::setupRightClickContextMenu()
             QAction* action;
             QIcon icon;
             if(iconTable[i])
-                icon = DIcon(QString("treat_selection_as_%1").arg(iconTable[i]));
+                icon = DIconHelper(QString("treat_selection_as_%1").arg(iconTable[i]));
             if(shortcutTable[i])
                 action = makeShortcutAction(icon, tr(strTable[i]), SLOT(setEncodeTypeRangeSlot()), QString("ActionTreatSelectionAs%1").arg(shortcutTable[i]).toUtf8().constData());
             else
@@ -721,7 +742,7 @@ void CPUDisassembly::setupRightClickContextMenu()
         return text != mHighlightToken.text;
     });
 
-    mMenuBuilder->loadFromConfig();
+    mMenuBuilder->loadFromConfig("CPUDisassemblyV2");
 }
 
 void CPUDisassembly::gotoOriginSlot()
@@ -1053,7 +1074,7 @@ void CPUDisassembly::gotoPreviousReferenceSlot()
     if(count)
     {
         if(index > 0 && addr == rvaToVa(getInitialSelection()))
-            DbgValToString("$__disasm_refindex", index - 1);
+            DbgValSetScalar("$__disasm_refindex", index - 1);
         gotoAddress(DbgValFromString("refsearch.addr($__disasm_refindex)"));
         GuiReferenceSetSingleSelection(int(DbgEval("$__disasm_refindex")), false);
     }
@@ -1065,7 +1086,7 @@ void CPUDisassembly::gotoNextReferenceSlot()
     if(count)
     {
         if(index + 1 < count && addr == rvaToVa(getInitialSelection()))
-            DbgValToString("$__disasm_refindex", index + 1);
+            DbgValSetScalar("$__disasm_refindex", index + 1);
         gotoAddress(DbgValFromString("refsearch.addr($__disasm_refindex)"));
         GuiReferenceSetSingleSelection(int(DbgEval("$__disasm_refindex")), false);
     }
@@ -1217,23 +1238,32 @@ void CPUDisassembly::findPatternSlot()
 {
     HexEditDialog hexEdit(this);
     hexEdit.isDataCopiable(false);
+
+    dsint addr = rvaToVa(getSelectionStart());
+
+    // Setup find mode based on search scope
     if(sender() == mFindPatternRegion)
-        hexEdit.showStartFromSelection(true, ConfigBool("Disassembler", "FindPatternFromSelection"));
+    {
+        // Setup for current memory region
+        duint regionStart = DbgMemFindBaseAddr(addr, 0);
+        duint regionSize = 0;
+        DbgMemFindBaseAddr(addr, &regionSize);
+        duint regionEnd = regionStart + regionSize;
+        hexEdit.setupFindMode(regionStart, regionEnd, addr, ConfigBool("Disassembler", "FindPatternFromSelection"));
+    }
+
     hexEdit.mHexEdit->setOverwriteMode(false);
     hexEdit.setWindowTitle(tr("Find Pattern..."));
     if(hexEdit.exec() != QDialog::Accepted)
         return;
-
-    dsint addr = rvaToVa(getSelectionStart());
 
     QString command;
     if(sender() == mFindPatternRegion)
     {
         bool startFromSelection = hexEdit.startFromSelection();
         Config()->setBool("Disassembler", "FindPatternFromSelection", startFromSelection);
-        if(!startFromSelection)
-            addr = DbgMemFindBaseAddr(addr, 0);
-        command = QString("findall %1, %2").arg(ToHexString(addr), hexEdit.mHexEdit->pattern());
+        dsint searchAddr = startFromSelection ? addr : DbgMemFindBaseAddr(addr, 0);
+        command = QString("findall %1, %2").arg(ToHexString(searchAddr), hexEdit.mHexEdit->pattern());
     }
     else if(sender() == mFindPatternModule)
     {
@@ -1581,8 +1611,7 @@ void CPUDisassembly::pushSelectionInto(bool copyBytes, QTextStream & stream, QTe
         }
         else
         {
-            for(const auto & token : inst.tokens.tokens)
-                disassembly += token.text;
+            disassembly = inst.tokens.toString();
         }
         QString fullComment;
         QString comment;
@@ -1641,6 +1670,29 @@ void CPUDisassembly::copySelectionSlot()
 void CPUDisassembly::copySelectionToFileSlot()
 {
     copySelectionToFileSlot(true);
+}
+
+void CPUDisassembly::setAddressColorSlot()
+{
+    if(!DbgIsDebugging())
+        return;
+    QAction* action = qobject_cast<QAction*>(sender());
+    if(!action)
+        return;
+
+    unsigned int color = action->data().toUInt();
+    setAddressColor(rvaToVa(getSelectionStart()), rvaToVa(getSelectionEnd()), color);
+
+    GuiUpdateAllViews();
+}
+
+void CPUDisassembly::clearAddressColorSlot()
+{
+    if(!DbgIsDebugging())
+        return;
+    clearAddressColor(rvaToVa(getSelectionStart()), rvaToVa(getSelectionEnd()));
+
+    GuiUpdateAllViews();
 }
 
 void CPUDisassembly::copySelectionNoBytesSlot()
@@ -1905,17 +1957,18 @@ void CPUDisassembly::labelHelpSlot()
         strcpy_s(setting, "https://www.google.com/search?q=@topic");
         BridgeSettingSet("Misc", "HelpOnSymbolicNameUrl", setting);
     }
+
     QString baseUrl(setting);
-    QString fullUrl = baseUrl.replace("@topic", topic);
 
     if(baseUrl.startsWith("execute://"))
     {
-        QString command = fullUrl.right(fullUrl.length() - 10);
+        QString command = baseUrl.right(baseUrl.length() - (sizeof("execute://") - 1)).replace("@topic", topic);
         QProcess::execute(command);
     }
     else
     {
-        QDesktopServices::openUrl(QUrl(fullUrl));
+        QUrl fullUrl(baseUrl.replace("@topic", QString(QUrl::toPercentEncoding(topic))));
+        QDesktopServices::openUrl(fullUrl);
     }
 }
 
@@ -1965,6 +2018,25 @@ void CPUDisassembly::traceCoverageWordSlot()
         {
             GuiAddLogMessage(tr("Failed to enable trace coverage for page %1.\n").arg(ToPtrString(i)).toUtf8().constData());
             break;
+        }
+    }
+    DbgCmdExec("traceexecute cip");
+}
+
+void CPUDisassembly::traceCoverageResetSlot()
+{
+    if(!DbgIsDebugging())
+        return;
+    duint base = mMemPage->getBase();
+    duint size = mMemPage->getSize();
+    for(duint i = base; i < base + size; i += 4096)
+    {
+        auto t = DbgFunctions()->GetTraceRecordType(i);
+        if(t == TRACERECORDTYPE::TraceRecordNone)
+            continue;
+        if(!(DbgFunctions()->SetTraceRecordType(i, TRACERECORDTYPE::TraceRecordNone) && DbgFunctions()->SetTraceRecordType(i, t)))
+        {
+            GuiAddLogMessage(tr("Failed to reset trace coverage for page %1.\n").arg(ToPtrString(i)).toUtf8().constData());
         }
     }
     DbgCmdExec("traceexecute cip");

@@ -17,7 +17,7 @@ public:
     void updateColors() override;
     void updateFonts() override;
 
-    void getColumnRichText(duint col, duint rva, RichTextPainter::List & richText) override;
+    void getColumnRichText(duint col, duint rva, RichTextPainter::List & richText) const override;
     QString paintContent(QPainter* painter, duint row, duint col, int x, int y, int w, int h) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
@@ -56,7 +56,8 @@ public slots:
     void updateSlot();
     void copyPtrColumnSlot();
     void copyCommentsColumnSlot();
-
+    void setAddressColorSlot();
+    void clearAddressColorSlot();
 private:
     duint mCsp = 0;
     bool bStackFrozen = false;
@@ -82,5 +83,5 @@ private:
     CommonActions* mCommonActions;
 
     std::vector<CPUCallStack> mCallstack;
-    static int CPUStack::getCurrentFrame(const std::vector<CPUStack::CPUCallStack> & mCallstack, duint va);
+    static int getCurrentFrame(const std::vector<CPUStack::CPUCallStack> & mCallstack, duint va);
 };

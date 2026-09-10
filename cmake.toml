@@ -2,9 +2,17 @@
 version = "3.15"
 cmkr-include = "cmake/cmkr.cmake"
 
+[options]
+X64DBG_BUILD_IN_TREE = true
+X64DBG_RELEASE = false
+
+[variables]
+CMAKE_MODULE_PATH = "${CMAKE_SOURCE_DIR}/cmake"
+
 [project]
 name = "x64dbg"
 description = "An open-source x64/x32 debugger for windows."
+msvc-runtime = "dynamic"
 include-before = [
     "cmake/VSToolchain.cmake"
 ]
@@ -17,26 +25,12 @@ x86 = "CMAKE_SIZEOF_VOID_P EQUAL 4"
 x64 = "CMAKE_SIZEOF_VOID_P EQUAL 8"
 
 [find-package]
-Qt5 = { components = ["Widgets", "Network", "WinExtras"] }
+Qt5 = { components = ["Widgets", "WinExtras"] }
 
-[target.zydis_wrapper]
-type = "static"
-sources = [
-    "src/zydis_wrapper/*.cpp",
-    "src/zydis_wrapper/*.h",
-    "src/zydis_wrapper/Zydis/Zydis.h",
-    "src/zydis_wrapper/zydis/Zydis.c",
-]
-include-directories = [
-    "src/zydis_wrapper",
-]
-private-include-directories = [
-    "src/zydis_wrapper/Zydis",
-]
-compile-definitions = [
-    "ZYCORE_STATIC_BUILD",
-    "ZYDIS_STATIC_BUILD",
-]
+[subdir."src/zydis_wrapper"]
+[subdir."src/gui/Src/ThirdPartyLibs/md4c"]
+[subdir."src/third_party"]
+[subdir."src/tests"]
 
 [target.bridge]
 type = "shared"
@@ -57,8 +51,6 @@ x64.OUTPUT_NAME = "x64bridge"
 type = "static"
 sources = [
     "src/dbg/btparser/btparser/lexer.cpp",
-    "src/dbg/btparser/btparser/parser.cpp",
-    "src/dbg/btparser/btparser/ast.h",
     "src/dbg/btparser/btparser/helpers.h",
     "src/dbg/btparser/btparser/keywords.h",
     "src/dbg/btparser/btparser/lexer.h",
@@ -69,11 +61,13 @@ sources = [
 include-directories = [
     "src/dbg/btparser",
 ]
+clang-any.compile-options = ["-Wno-self-assign-field"]
 
 [target.dbg]
 type = "shared"
 sources = [
     "src/dbg/*.cpp",
+    "src/dbg/*.c",
     "src/dbg/*.h",
     "src/dbg/analysis/*.cpp",
     "src/dbg/analysis/*.h",
@@ -91,13 +85,14 @@ sources = [
     "src/dbg/XEDParse/*.h",
 ]
 private-link-libraries = [
-    "zydis_wrapper",
-    "bridge",
-    "btparser",
+    "::zydis_wrapper",
+    "::bridge",
+    "::btparser",
     "Psapi",
     "Shlwapi",
     "Ws2_32",
     "Wininet",
+    "Iphlpapi",
 ]
 x86.private-link-libraries = [
     "src/dbg/dbghelp/dbghelp_x86.lib",
@@ -121,11 +116,18 @@ x64.private-link-libraries = [
 ]
 private-compile-definitions = [
     "BUILD_DBG",
+    "NOMINMAX",
 ]
 private-include-directories = [
     "src/dbg",
     "src/dbg/analysis",
     "src/dbg/commands",
+]
+msvc.link-options = [
+    "/DELAYLOAD:TitanEngine.dll",
+]
+msvc.link-libraries = [
+    "Delayimp",
 ]
 
 [target.dbg.properties]
@@ -142,11 +144,13 @@ sources = [
 ]
 private-link-libraries = [
     "Qt5::Widgets",
-    "Qt5::Network",
     "Qt5::WinExtras",
-    "zydis_wrapper",
-    "bridge",
+    "::zydis_wrapper",
+    "::bridge",
+    "::md4c-html",
     "winmm",
+    "wininet",
+    "dwmapi"
 ]
 x86.private-link-libraries = [
     "src/gui/Src/ThirdPartyLibs/ldconvert/ldconvert_x86.lib",
@@ -169,7 +173,9 @@ private-include-directories = [
 private-compile-definitions = [
     "BUILD_LIB",
     "NOMINMAX",
+    "X64DBG",
 ]
+X64DBG_RELEASE.compile-definitions = ["X64DBG_RELEASE"]
 include-after = ["cmake/deps.cmake"]
 
 [target.gui.properties]
@@ -179,8 +185,58 @@ AUTOMOC = true
 AUTORCC = true
 AUTOUIC = true
 
+[target.exe]
+type = "executable"
+msvc-runtime = "static"
+sources = [
+    "src/exe/*.cpp",
+    "src/exe/*.h",
+    "src/exe/manifest.xml",
+    "src/exe/resource.rc",
+    "src/exe/strings_utf8.rc",
+]
+x86.sources = ["src/exe/icon32.rc"]
+x64.sources = ["src/exe/icon64.rc"]
+link-libraries = [
+    "::bridge",
+    "Wintrust",
+]
+msvc.link-options = [
+    # resource.rc already embeds manifest.xml as RT_MANIFEST, so disable the
+    # linker's default manifest to avoid embedding a second one.
+    "/MANIFEST:NO",
+    "/DELAYLOAD:user32.dll",
+    "/DELAYLOAD:wintrust.dll",
+    "/DELAYLOAD:$<TARGET_FILE_NAME:bridge>",
+    "/NOIMPLIB",
+    "/NOEXP",
+    "/LARGEADDRESSAWARE",
+]
+msvc.link-libraries = [
+    "Delayimp",
+]
+# Make the executable build everything
+dependencies = [
+    "dbg",
+    "gui",
+    "loaddll",
+    "deps",
+    "third_party",
+]
+x86.dependencies = ["launcher"]
+
+[target.exe.properties]
+x86.OUTPUT_NAME = "x32dbg"
+x64.OUTPUT_NAME = "x64dbg"
+x86.ARCHIVE_OUTPUT_NAME = "x32dbg_exe"
+x64.ARCHIVE_OUTPUT_NAME = "x64dbg_exe"
+x86.PDB_NAME = "x32dbg_exe"
+x64.PDB_NAME = "x64dbg_exe"
+WIN32_EXECUTABLE = "ON"
+
 [target.loaddll]
 type = "executable"
+msvc-runtime = "static"
 sources = [
     "src/loaddll/loaddll.cpp",
 ]
@@ -190,49 +246,44 @@ x86.link-libraries = [
 x64.link-libraries = [
     "src/dbg/ntdll/ntdll_x64.lib",
 ]
+msvc.link-options = [
+    "/DELAYLOAD:user32.dll",
+]
+msvc.link-libraries = [
+    "Delayimp",
+]
 
 [target.loaddll.properties]
 WIN32_EXECUTABLE = "ON"
 
-[target.exe]
+[target.headless]
 type = "executable"
 sources = [
-    "src/exe/*.cpp",
-    "src/exe/*.h",
-    "src/exe/manifest.xml",
-    "src/exe/resource.rc",
-    "src/exe/strings.rc",
+    "src/headless/*.cpp",
+    "src/headless/*.h",
 ]
-x86.sources = ["src/exe/icon32.rc"]
-x64.sources = ["src/exe/icon64.rc"]
 link-libraries = [
-    "bridge",
-    "Wintrust",
+    "::bridge",
 ]
 msvc.link-options = [
-    "/DEF:${CMAKE_SOURCE_DIR}/src/exe/signaturecheck.def",
-    "/INCREMENTAL:NO",
+    "/LARGEADDRESSAWARE",
 ]
-cmake-after = """
-# Make the executable the main target
-add_dependencies(exe dbg gui deps)
-"""
-
-[target.exe.properties]
-x86.OUTPUT_NAME = "x32dbg"
-x64.OUTPUT_NAME = "x64dbg"
-x86.PDB_NAME = "x32dbg_exe"
-x64.PDB_NAME = "x64dbg_exe"
-WIN32_EXECUTABLE = "ON"
+dependencies = ["exe"]
 
 [target.launcher]
 type = "executable"
 condition = "x86"
+msvc-runtime = "static"
 sources = [
     "src/launcher/*.cpp",
     "src/exe/icon.rc",
     "src/exe/resource.rc",
-    "src/exe/strings.rc",
+    "src/exe/strings_utf8.rc",
+]
+msvc.link-options = [
+    # resource.rc already embeds manifest.xml as RT_MANIFEST, so disable the
+    # linker's default manifest to avoid embedding a second one.
+    "/MANIFEST:NO",
 ]
 link-libraries = [
     "Shlwapi",
@@ -242,3 +293,4 @@ link-libraries = [
 [target.launcher.properties]
 OUTPUT_NAME = "x96dbg"
 WIN32_EXECUTABLE = "ON"
+X64DBG_BUILD_IN_TREE.RUNTIME_OUTPUT_DIRECTORY = "${PROJECT_SOURCE_DIR}/bin"

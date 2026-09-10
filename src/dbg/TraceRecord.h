@@ -15,6 +15,7 @@ public:
         InstructionHeading = 1,
         InstructionTailing = 2,
         InstructionOverlapped = 3, // The byte was executed with differing instruction base addresses
+        Unknown = 4,
         DataByte,  // This and the following is not implemented yet.
         DataWord,
         DataDWord,
@@ -55,6 +56,7 @@ public:
     void TraceExecute(duint address, duint size);
     //void TraceAccess(duint address, unsigned char size, TraceRecordByteType accessType);
     void TraceExecuteRecord(const Zydis & newInstruction);
+    void FlushTraceExecuteRecord();
 
     unsigned int getHitCount(duint address);
     TraceRecordByteType getByteType(duint address);
@@ -66,12 +68,14 @@ public:
     void saveToDb(JSON root);
     void loadFromDb(JSON root);
 private:
+    // An enumerated value indicating this byte is either start of instruction, middle of instruction, end of instruction, or part of overlapped instruction.
     enum TraceRecordByteType_2bit
     {
         _InstructionBody = 0,
         _InstructionHeading = 1,
         _InstructionTailing = 2,
-        _InstructionOverlapped = 3
+        _InstructionOverlapped = 3,
+        _Unknown = 4 // Never recorded, unknown
     };
 
     struct TraceRecordPage

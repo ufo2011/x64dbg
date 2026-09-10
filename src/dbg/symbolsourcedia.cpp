@@ -145,9 +145,9 @@ bool SymbolSourceDIA::loadSymbolsAsync()
 #undef filter
 
         if(sym.type == DiaSymbolType::PUBLIC ||
-        sym.type == DiaSymbolType::FUNCTION ||
-        sym.type == DiaSymbolType::LABEL ||
-        sym.type == DiaSymbolType::DATA) //TODO: properly handle import thunks + empty names + line symbols
+                sym.type == DiaSymbolType::FUNCTION ||
+                sym.type == DiaSymbolType::LABEL ||
+                sym.type == DiaSymbolType::DATA) //TODO: properly handle import thunks + empty names + line symbols
         {
             _symData.emplace_back();
             SymbolInfo & symInfo = _symData.back();
@@ -157,6 +157,7 @@ bool SymbolSourceDIA::loadSymbolsAsync()
             symInfo.disp = sym.disp;
             symInfo.rva = (duint)sym.virtualAddress;
             symInfo.publicSymbol = sym.publicSymbol;
+            symInfo.functionSymbol = sym.type == DiaSymbolType::FUNCTION || sym.function;
         }
 
         return true;
@@ -211,6 +212,7 @@ bool SymbolSourceDIA::loadSymbolsAsync()
             SymbolInfo & sym = _symData[addrIndex.index];
             if(prev && sym.rva == prev->rva && sym.decoratedName == prev->decoratedName && sym.undecoratedName == prev->undecoratedName)
             {
+                prev->functionSymbol |= sym.functionSymbol;
                 String().swap(sym.decoratedName);
                 String().swap(sym.undecoratedName);
                 continue;
@@ -458,12 +460,16 @@ bool SymbolSourceDIA::findSymbolExactOrLower(duint rva, SymbolInfo & symInfo)
             return it;
         // right now 'it' points to the first element bigger than rva
         return it == _symAddrMap.begin() ? _symAddrMap.end() : --it;
-    }();
+    }
+    ();
 
     if(it != _symAddrMap.end())
     {
         symInfo = _symData[it->index];
         symInfo.disp = (int32_t)(rva - symInfo.rva);
+        if(symInfo.rva == rva)
+            for(auto exact = it; exact != _symAddrMap.end() && exact->rva == rva; ++exact)
+                symInfo.functionSymbol |= _symData[exact->index].functionSymbol;
         return true;
     }
 

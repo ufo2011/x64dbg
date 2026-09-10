@@ -283,6 +283,7 @@ public slots:
     void followDisassemblySlot();
     void refreshSlot();
     void saveImageSlot();
+    void copyImageSlot();
     void xrefSlot();
     void mnemonicHelpSlot();
     void fitToWindowSlot();
@@ -383,6 +384,7 @@ private:
     QColor graphCurrentShadowColor;
     QColor mInstructionHighlightColor;
     QColor mInstructionHighlightBackgroundColor;
+    std::vector<QColor> mAddressColorPresets;
 
     BridgeCFGraph currentGraph;
     std::unordered_map<duint, duint> currentBlockMap;
@@ -392,4 +394,6 @@ private:
 
     void addReferenceAction(QMenu* menu, duint addr, const QString & description);
     bool getHighlightedTokenValueText(QString & text) const;
+    void paintImage(QPainter* painter);
+    QImage getImage();
 };

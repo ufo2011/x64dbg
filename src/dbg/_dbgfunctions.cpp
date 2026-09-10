@@ -32,6 +32,8 @@
 #include "database.h"
 #include "dbghelp_safe.h"
 #include "types.h"
+#include "label.h"
+#include "commandparser.h"
 
 static DBGFUNCTIONS _dbgfunctions;
 
@@ -51,7 +53,7 @@ static int SymAutoComplete(const char* Search, char** Buffer, int MaxSymbols)
 
     std::unordered_set<std::string> visited;
 
-    static const bool caseSensitiveAutoComplete = settingboolget("Gui", "CaseSensitiveAutoComplete");
+    static const bool caseSensitiveAutoComplete = settingboolget("Gui", "CaseSensitiveAutoComplete", false);
 
     int count = 0;
     std::string prefix(Search);
@@ -89,6 +91,17 @@ static int SymAutoComplete(const char* Search, char** Buffer, int MaxSymbols)
             {
                 return addName(symInfo.decoratedName);
             }, caseSensitiveAutoComplete);
+        }
+    }
+
+    if(count < MaxSymbols)
+    {
+        auto labels = LabelFindPrefix(prefix, MaxSymbols - count, caseSensitiveAutoComplete);
+        for(auto & label : labels)
+        {
+            Buffer[count] = (char*)BridgeAlloc(label.size() + 1);
+            memcpy(Buffer[count], label.c_str(), label.size() + 1);
+            count++;
         }
     }
 
@@ -552,5 +565,23 @@ void dbgfunctionsinit()
     _dbgfunctions.BpSetFieldText = [](const BP_REF * ref, BP_FIELD field, const char* value)
     {
         return BpSetFieldText(*ref, field, value);
+    };
+    _dbgfunctions.CommandEscape = [](const char* argument, char* result, size_t resultSize)
+    {
+        if(argument == nullptr || result == nullptr)
+            return false;
+        auto escaped = Command::Escape(argument);
+        if(resultSize <= escaped.size())
+            return false;
+        memcpy(result, escaped.c_str(), escaped.size() + 1);
+        return true;
+    };
+    _dbgfunctions.ModNameFromHash = [](duint hash, char* modname)
+    {
+        auto name = ModNameFromHash(hash);
+        if(name.empty())
+            return false;
+        strncpy_s(modname, MAX_MODULE_SIZE, name.c_str(), _TRUNCATE);
+        return true;
     };
 }

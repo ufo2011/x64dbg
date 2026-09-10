@@ -1,6 +1,6 @@
 #include "AbstractStdTable.h"
 #include "Bridge.h"
-#include "RichTextPainter.h"
+#include <Utils/RichTextPainter.h>
 
 AbstractStdTable::AbstractStdTable(QWidget* parent) : AbstractTableView(parent)
 {
@@ -387,6 +387,7 @@ void AbstractStdTable::mousePressEvent(QMouseEvent* event)
 
                     // TODO: only update if the selection actually changed
                     updateViewport();
+                    accessibilityMousePressSetColumn(event);
 
                     accept = true;
                 }
@@ -428,6 +429,64 @@ void AbstractStdTable::keyPressEvent(QKeyEvent* event)
     emit keyPressedSignal(event);
     int key = event->key();
     Qt::KeyboardModifiers modifiers = event->modifiers();
+
+    if(key == Qt::Key_PageUp || key == Qt::Key_PageDown)
+    {
+        if(modifiers == Qt::NoModifier || modifiers == Qt::KeypadModifier || (mIsMultiSelectionAllowed && modifiers == Qt::ShiftModifier))
+        {
+            auto moveSelectionEdge = [this](duint index)
+            {
+                auto currentIndex = getInitialSelection();
+                if(index < currentIndex)
+                {
+                    if(index < mSelection.fromIndex)
+                        mSelection.fromIndex = index;
+                    else
+                        mSelection.toIndex = index;
+                }
+                else if(index > currentIndex)
+                {
+                    if(index > mSelection.toIndex)
+                        mSelection.toIndex = index;
+                    else
+                        mSelection.fromIndex = index;
+                }
+                else
+                {
+                    return;
+                }
+
+                mSelection.firstSelectedIndex = index;
+                emit selectionChanged(index);
+                accessibilitySelectionChanged();
+            };
+
+            verticalScrollBar()->triggerAction(key == Qt::Key_PageUp ? QAbstractSlider::SliderPageStepSub : QAbstractSlider::SliderPageStepAdd);
+
+            if(getRowCount() == 0)
+                return;
+
+            auto selectedIndex = getTableOffset();
+            if(key == Qt::Key_PageDown && getNbrOfLineToPrint() > 1)
+                selectedIndex += getNbrOfLineToPrint() - 1;
+
+            if(selectedIndex >= getRowCount())
+                selectedIndex = getRowCount() - 1;
+
+            if(mIsMultiSelectionAllowed && modifiers == Qt::ShiftModifier)
+                moveSelectionEdge(selectedIndex);
+            else
+                setSingleSelection(selectedIndex);
+
+            // TODO: only update if the selection actually changed
+            updateViewport();
+        }
+        else
+        {
+            AbstractTableView::keyPressEvent(event);
+        }
+        return;
+    }
 
     if(key == Qt::Key_Up ||
             key == Qt::Key_Down ||
@@ -538,12 +597,14 @@ void AbstractStdTable::expandSelectionUpTo(duint to)
         mSelection.fromIndex = to;
         mSelection.toIndex = mSelection.firstSelectedIndex;
         emit selectionChanged(to);
+        accessibilitySelectionChanged();
     }
     else if(to > mSelection.firstSelectedIndex)
     {
         mSelection.fromIndex = mSelection.firstSelectedIndex;
         mSelection.toIndex = to;
         emit selectionChanged(to);
+        accessibilitySelectionChanged();
     }
     else if(to == mSelection.firstSelectedIndex)
     {
@@ -569,6 +630,7 @@ void AbstractStdTable::expandUp()
         }
 
         emit selectionChanged(rowIndex);
+        accessibilitySelectionChanged();
     }
 }
 
@@ -593,6 +655,7 @@ void AbstractStdTable::expandDown()
 
 
         emit selectionChanged(rowIndex);
+        accessibilitySelectionChanged();
     }
 }
 
@@ -619,6 +682,7 @@ void AbstractStdTable::setSingleSelection(duint index)
     mSelection.fromIndex = index;
     mSelection.toIndex = index;
     emit selectionChanged(index);
+    accessibilitySelectionChanged();
 }
 
 duint AbstractStdTable::getInitialSelection() const
@@ -679,8 +743,12 @@ void AbstractStdTable::selectPrevious()
 
 void AbstractStdTable::selectAll()
 {
+    duint rowCount = getRowCount();
+    if(rowCount == 0)
+        return;
+
     duint index = 0;
-    duint indexEnd = getRowCount() - 1;
+    duint indexEnd = rowCount - 1;
 
     mSelection.firstSelectedIndex = index;
     mSelection.fromIndex = index;
@@ -1077,4 +1145,9 @@ duint AbstractStdTable::getAddressForPosition(int x, int y)
     }
     else
         return 0;
+}
+
+int AbstractStdTable::accessibilitySelectedRow() const
+{
+    return getInitialSelection() - getTableOffset();
 }

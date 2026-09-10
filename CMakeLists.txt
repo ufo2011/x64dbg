@@ -7,6 +7,9 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
 	message(FATAL_ERROR "In-tree builds are not supported. Run CMake from a separate directory: cmake -B build")
 endif()
 
+# Enable support for MSVC_RUNTIME_LIBRARY
+cmake_policy(SET CMP0091 NEW)
+
 set(CMKR_ROOT_PROJECT OFF)
 if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
 	set(CMKR_ROOT_PROJECT ON)
@@ -22,11 +25,25 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
 
 	# Create a configure-time dependency on cmake.toml to improve IDE support
 	set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS cmake.toml)
+	if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+		set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+	endif()
+
 endif()
+
+# Options
+option(X64DBG_BUILD_IN_TREE "" ON)
+option(X64DBG_RELEASE "" OFF)
+
+# Variables
+set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 include("cmake/VSToolchain.cmake")
 
 project(x64dbg
+	LANGUAGES
+		C
+		CXX
 	DESCRIPTION
 		"An open-source x64/x32 debugger for windows."
 )
@@ -37,36 +54,48 @@ include("cmake/VSFlags.cmake")
 find_package(Qt5 REQUIRED
 	COMPONENTS
 		Widgets
-		Network
 		WinExtras
 )
 
-# Target: zydis_wrapper
-set(zydis_wrapper_SOURCES
-	cmake.toml
-	"src/zydis_wrapper/Zydis/Zydis.h"
-	"src/zydis_wrapper/zydis/Zydis.c"
-	"src/zydis_wrapper/zydis_wrapper.cpp"
-	"src/zydis_wrapper/zydis_wrapper.h"
-)
+# Subdirectory: src/zydis_wrapper
+set(CMKR_CMAKE_FOLDER ${CMAKE_FOLDER})
+if(CMAKE_FOLDER)
+	set(CMAKE_FOLDER "${CMAKE_FOLDER}/src/zydis_wrapper")
+else()
+	set(CMAKE_FOLDER "src/zydis_wrapper")
+endif()
+add_subdirectory("src/zydis_wrapper")
+set(CMAKE_FOLDER ${CMKR_CMAKE_FOLDER})
 
-add_library(zydis_wrapper STATIC)
+# Subdirectory: src/gui/Src/ThirdPartyLibs/md4c
+set(CMKR_CMAKE_FOLDER ${CMAKE_FOLDER})
+if(CMAKE_FOLDER)
+	set(CMAKE_FOLDER "${CMAKE_FOLDER}/src/gui/Src/ThirdPartyLibs/md4c")
+else()
+	set(CMAKE_FOLDER "src/gui/Src/ThirdPartyLibs/md4c")
+endif()
+add_subdirectory("src/gui/Src/ThirdPartyLibs/md4c")
+set(CMAKE_FOLDER ${CMKR_CMAKE_FOLDER})
 
-target_sources(zydis_wrapper PRIVATE ${zydis_wrapper_SOURCES})
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${zydis_wrapper_SOURCES})
+# Subdirectory: src/third_party
+set(CMKR_CMAKE_FOLDER ${CMAKE_FOLDER})
+if(CMAKE_FOLDER)
+	set(CMAKE_FOLDER "${CMAKE_FOLDER}/src/third_party")
+else()
+	set(CMAKE_FOLDER "src/third_party")
+endif()
+add_subdirectory("src/third_party")
+set(CMAKE_FOLDER ${CMKR_CMAKE_FOLDER})
 
-target_compile_definitions(zydis_wrapper PUBLIC
-	ZYCORE_STATIC_BUILD
-	ZYDIS_STATIC_BUILD
-)
-
-target_include_directories(zydis_wrapper PUBLIC
-	"src/zydis_wrapper"
-)
-
-target_include_directories(zydis_wrapper PRIVATE
-	"src/zydis_wrapper/Zydis"
-)
+# Subdirectory: src/tests
+set(CMKR_CMAKE_FOLDER ${CMAKE_FOLDER})
+if(CMAKE_FOLDER)
+	set(CMAKE_FOLDER "${CMAKE_FOLDER}/src/tests")
+else()
+	set(CMAKE_FOLDER "src/tests")
+endif()
+add_subdirectory("src/tests")
+set(CMAKE_FOLDER ${CMKR_CMAKE_FOLDER})
 
 # Target: bridge
 set(bridge_SOURCES
@@ -79,6 +108,7 @@ set(bridge_SOURCES
 	"src/bridge/bridgemain.cpp"
 	"src/bridge/bridgemain.h"
 	"src/bridge/bridgemain_checker.c"
+	"src/bridge/startupargs.h"
 )
 
 add_library(bridge SHARED)
@@ -107,13 +137,11 @@ endif()
 # Target: btparser
 set(btparser_SOURCES
 	cmake.toml
-	"src/dbg/btparser/btparser/ast.h"
 	"src/dbg/btparser/btparser/helpers.h"
 	"src/dbg/btparser/btparser/keywords.h"
 	"src/dbg/btparser/btparser/lexer.cpp"
 	"src/dbg/btparser/btparser/lexer.h"
 	"src/dbg/btparser/btparser/operators.h"
-	"src/dbg/btparser/btparser/parser.cpp"
 	"src/dbg/btparser/btparser/parser.h"
 	"src/dbg/btparser/btparser/testfiles.h"
 )
@@ -122,6 +150,12 @@ add_library(btparser STATIC)
 
 target_sources(btparser PRIVATE ${btparser_SOURCES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${btparser_SOURCES})
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_C_COMPILER_ID MATCHES "Clang") # clang-any
+	target_compile_options(btparser PUBLIC
+		-Wno-self-assign-field
+	)
+endif()
 
 target_include_directories(btparser PUBLIC
 	"src/dbg/btparser"
@@ -138,6 +172,7 @@ set(dbg_SOURCES
 	"src/dbg/WinInet-Downloader/downslib.cpp"
 	"src/dbg/WinInet-Downloader/downslib.h"
 	"src/dbg/XEDParse/XEDParse.h"
+	"src/dbg/_apichecker.c"
 	"src/dbg/_dbgfunctions.cpp"
 	"src/dbg/_dbgfunctions.h"
 	"src/dbg/_exports.cpp"
@@ -180,6 +215,8 @@ set(dbg_SOURCES
 	"src/dbg/_scriptapi_stack.h"
 	"src/dbg/_scriptapi_symbol.cpp"
 	"src/dbg/_scriptapi_symbol.h"
+	"src/dbg/addresscolor.cpp"
+	"src/dbg/addresscolor.h"
 	"src/dbg/addrinfo.cpp"
 	"src/dbg/addrinfo.h"
 	"src/dbg/analysis/AnalysisPass.cpp"
@@ -209,6 +246,7 @@ set(dbg_SOURCES
 	"src/dbg/analysis/xrefsanalysis.h"
 	"src/dbg/animate.cpp"
 	"src/dbg/animate.h"
+	"src/dbg/args.h"
 	"src/dbg/argument.cpp"
 	"src/dbg/argument.h"
 	"src/dbg/assemble.cpp"
@@ -224,6 +262,8 @@ set(dbg_SOURCES
 	"src/dbg/commandline.h"
 	"src/dbg/commandparser.cpp"
 	"src/dbg/commandparser.h"
+	"src/dbg/commands/cmd-addresscolor.cpp"
+	"src/dbg/commands/cmd-addresscolor.h"
 	"src/dbg/commands/cmd-all.h"
 	"src/dbg/commands/cmd-analysis.cpp"
 	"src/dbg/commands/cmd-analysis.h"
@@ -269,6 +309,8 @@ set(dbg_SOURCES
 	"src/dbg/console.h"
 	"src/dbg/database.cpp"
 	"src/dbg/database.h"
+	"src/dbg/database_cb_batcher.cpp"
+	"src/dbg/database_cb_batcher.h"
 	"src/dbg/datainst_helper.cpp"
 	"src/dbg/datainst_helper.h"
 	"src/dbg/dbghelp_safe.cpp"
@@ -311,6 +353,7 @@ set(dbg_SOURCES
 	"src/dbg/jansson/jansson_x64dbg.h"
 	"src/dbg/jit.cpp"
 	"src/dbg/jit.h"
+	"src/dbg/jobqueue.h"
 	"src/dbg/label.cpp"
 	"src/dbg/label.h"
 	"src/dbg/loop.cpp"
@@ -365,6 +408,8 @@ set(dbg_SOURCES
 	"src/dbg/taskthread.h"
 	"src/dbg/tcpconnections.cpp"
 	"src/dbg/tcpconnections.h"
+	"src/dbg/testing.cpp"
+	"src/dbg/testing.h"
 	"src/dbg/thread.cpp"
 	"src/dbg/thread.h"
 	"src/dbg/threading.cpp"
@@ -372,6 +417,8 @@ set(dbg_SOURCES
 	"src/dbg/types.cpp"
 	"src/dbg/types.h"
 	"src/dbg/typesparser.cpp"
+	"src/dbg/typevisitor.cpp"
+	"src/dbg/typevisitor.h"
 	"src/dbg/value.cpp"
 	"src/dbg/value.h"
 	"src/dbg/variable.cpp"
@@ -391,6 +438,7 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${dbg_SOURCES})
 
 target_compile_definitions(dbg PRIVATE
 	BUILD_DBG
+	NOMINMAX
 )
 
 target_include_directories(dbg PRIVATE
@@ -398,6 +446,24 @@ target_include_directories(dbg PRIVATE
 	"src/dbg/analysis"
 	"src/dbg/commands"
 )
+
+if(MSVC) # msvc
+	target_link_libraries(dbg PUBLIC
+		Delayimp
+	)
+endif()
+
+if(NOT TARGET zydis_wrapper)
+	message(FATAL_ERROR "Target \"zydis_wrapper\" referenced by \"dbg\" does not exist!")
+endif()
+
+if(NOT TARGET bridge)
+	message(FATAL_ERROR "Target \"bridge\" referenced by \"dbg\" does not exist!")
+endif()
+
+if(NOT TARGET btparser)
+	message(FATAL_ERROR "Target \"btparser\" referenced by \"dbg\" does not exist!")
+endif()
 
 target_link_libraries(dbg PRIVATE
 	zydis_wrapper
@@ -407,6 +473,7 @@ target_link_libraries(dbg PRIVATE
 	Shlwapi
 	Ws2_32
 	Wininet
+	Iphlpapi
 )
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 4) # x86
@@ -435,6 +502,12 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 8) # x64
 	)
 endif()
 
+if(MSVC) # msvc
+	target_link_options(dbg PUBLIC
+		"/DELAYLOAD:TitanEngine.dll"
+	)
+endif()
+
 if(CMAKE_SIZEOF_VOID_P EQUAL 4) # x86
 	set_target_properties(dbg PROPERTIES
 		OUTPUT_NAME
@@ -452,6 +525,24 @@ endif()
 # Target: gui
 set(gui_SOURCES
 	cmake.toml
+	"src/gui/Src/Accessible/Accessible.cpp"
+	"src/gui/Src/Accessible/Accessible.h"
+	"src/gui/Src/Accessible/AccessibleAbstractTableView.cpp"
+	"src/gui/Src/Accessible/AccessibleAbstractTableView.h"
+	"src/gui/Src/Accessible/AccessibleAbstractTableViewCell.cpp"
+	"src/gui/Src/Accessible/AccessibleAbstractTableViewCell.h"
+	"src/gui/Src/Accessible/AccessibleAbstractTableViewCellTitle.cpp"
+	"src/gui/Src/Accessible/AccessibleAbstractTableViewCellTitle.h"
+	"src/gui/Src/Accessible/AccessibleDisassembly.cpp"
+	"src/gui/Src/Accessible/AccessibleDisassembly.h"
+	"src/gui/Src/Accessible/AccessibleHexDump.cpp"
+	"src/gui/Src/Accessible/AccessibleHexDump.h"
+	"src/gui/Src/Accessible/AccessibleRegistersView.cpp"
+	"src/gui/Src/Accessible/AccessibleRegistersView.h"
+	"src/gui/Src/Accessible/AccessibleStdTable.cpp"
+	"src/gui/Src/Accessible/AccessibleStdTable.h"
+	"src/gui/Src/Accessible/AccessibleTraceBrowser.cpp"
+	"src/gui/Src/Accessible/AccessibleTraceBrowser.h"
 	"src/gui/Src/BasicView/AbstractSearchList.h"
 	"src/gui/Src/BasicView/AbstractStdTable.cpp"
 	"src/gui/Src/BasicView/AbstractStdTable.h"
@@ -560,6 +651,9 @@ set(gui_SOURCES
 	"src/gui/Src/Gui/DisassemblerGraphView.h"
 	"src/gui/Src/Gui/DisassemblyPopup.cpp"
 	"src/gui/Src/Gui/DisassemblyPopup.h"
+	"src/gui/Src/Gui/DisplayTypeDialog.cpp"
+	"src/gui/Src/Gui/DisplayTypeDialog.h"
+	"src/gui/Src/Gui/DisplayTypeDialog.ui"
 	"src/gui/Src/Gui/EditBreakpointDialog.cpp"
 	"src/gui/Src/Gui/EditBreakpointDialog.h"
 	"src/gui/Src/Gui/EditBreakpointDialog.ui"
@@ -584,6 +678,8 @@ set(gui_SOURCES
 	"src/gui/Src/Gui/HexLineEdit.cpp"
 	"src/gui/Src/Gui/HexLineEdit.h"
 	"src/gui/Src/Gui/HexLineEdit.ui"
+	"src/gui/Src/Gui/ImageTextBrowser.cpp"
+	"src/gui/Src/Gui/ImageTextBrowser.h"
 	"src/gui/Src/Gui/LineEditDialog.cpp"
 	"src/gui/Src/Gui/LineEditDialog.h"
 	"src/gui/Src/Gui/LineEditDialog.ui"
@@ -620,6 +716,9 @@ set(gui_SOURCES
 	"src/gui/Src/Gui/ReferenceManager.h"
 	"src/gui/Src/Gui/RegistersView.cpp"
 	"src/gui/Src/Gui/RegistersView.h"
+	"src/gui/Src/Gui/ReleaseNotesDialog.cpp"
+	"src/gui/Src/Gui/ReleaseNotesDialog.h"
+	"src/gui/Src/Gui/ReleaseNotesDialog.ui"
 	"src/gui/Src/Gui/RichTextItemDelegate.cpp"
 	"src/gui/Src/Gui/RichTextItemDelegate.h"
 	"src/gui/Src/Gui/SEHChainView.cpp"
@@ -644,7 +743,6 @@ set(gui_SOURCES
 	"src/gui/Src/Gui/SourceViewerManager.h"
 	"src/gui/Src/Gui/StructWidget.cpp"
 	"src/gui/Src/Gui/StructWidget.h"
-	"src/gui/Src/Gui/StructWidget.ui"
 	"src/gui/Src/Gui/SymbolView.cpp"
 	"src/gui/Src/Gui/SymbolView.h"
 	"src/gui/Src/Gui/SymbolView.ui"
@@ -659,6 +757,8 @@ set(gui_SOURCES
 	"src/gui/Src/Gui/ThreadView.h"
 	"src/gui/Src/Gui/TimeWastedCounter.cpp"
 	"src/gui/Src/Gui/TimeWastedCounter.h"
+	"src/gui/Src/Gui/TypeWidget.cpp"
+	"src/gui/Src/Gui/TypeWidget.h"
 	"src/gui/Src/Gui/VirtualModDialog.cpp"
 	"src/gui/Src/Gui/VirtualModDialog.h"
 	"src/gui/Src/Gui/VirtualModDialog.ui"
@@ -685,6 +785,9 @@ set(gui_SOURCES
 	"src/gui/Src/QHexEdit/XByteArray.cpp"
 	"src/gui/Src/QHexEdit/XByteArray.h"
 	"src/gui/Src/ThirdPartyLibs/ldconvert/ldconvert.h"
+	"src/gui/Src/ThirdPartyLibs/md4c/md4c-entity.h"
+	"src/gui/Src/ThirdPartyLibs/md4c/md4c-html.h"
+	"src/gui/Src/ThirdPartyLibs/md4c/md4c.h"
 	"src/gui/Src/Tracer/TraceBrowser.cpp"
 	"src/gui/Src/Tracer/TraceBrowser.h"
 	"src/gui/Src/Tracer/TraceDump.cpp"
@@ -760,9 +863,16 @@ add_library(gui SHARED)
 target_sources(gui PRIVATE ${gui_SOURCES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${gui_SOURCES})
 
+if(X64DBG_RELEASE) # X64DBG_RELEASE
+	target_compile_definitions(gui PUBLIC
+		X64DBG_RELEASE
+	)
+endif()
+
 target_compile_definitions(gui PRIVATE
 	BUILD_LIB
 	NOMINMAX
+	X64DBG
 )
 
 target_include_directories(gui PRIVATE
@@ -778,13 +888,27 @@ target_include_directories(gui PRIVATE
 	"src/gui/Src/ThirdPartyLibs/ldconvert"
 )
 
+if(NOT TARGET zydis_wrapper)
+	message(FATAL_ERROR "Target \"zydis_wrapper\" referenced by \"gui\" does not exist!")
+endif()
+
+if(NOT TARGET bridge)
+	message(FATAL_ERROR "Target \"bridge\" referenced by \"gui\" does not exist!")
+endif()
+
+if(NOT TARGET md4c-html)
+	message(FATAL_ERROR "Target \"md4c-html\" referenced by \"gui\" does not exist!")
+endif()
+
 target_link_libraries(gui PRIVATE
 	Qt5::Widgets
-	Qt5::Network
 	Qt5::WinExtras
 	zydis_wrapper
 	bridge
+	md4c-html
 	winmm
+	wininet
+	dwmapi
 )
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 4) # x86
@@ -825,6 +949,115 @@ set_target_properties(gui PROPERTIES
 set(CMKR_TARGET gui)
 include("cmake/deps.cmake")
 
+# Target: exe
+set(exe_SOURCES
+	cmake.toml
+	"src/exe/LoadResourceString.h"
+	"src/exe/crashdump.cpp"
+	"src/exe/crashdump.h"
+	"src/exe/icon.h"
+	"src/exe/manifest.xml"
+	"src/exe/resource.h"
+	"src/exe/resource.rc"
+	"src/exe/signaturecheck.cpp"
+	"src/exe/signaturecheck.h"
+	"src/exe/strings.h"
+	"src/exe/strings_utf8.rc"
+	"src/exe/x64dbg_exe.cpp"
+)
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 4) # x86
+	list(APPEND exe_SOURCES
+		"src/exe/icon32.rc"
+	)
+endif()
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 8) # x64
+	list(APPEND exe_SOURCES
+		"src/exe/icon64.rc"
+	)
+endif()
+
+add_executable(exe)
+
+target_sources(exe PRIVATE ${exe_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${exe_SOURCES})
+
+if(NOT TARGET bridge)
+	message(FATAL_ERROR "Target \"bridge\" referenced by \"exe\" does not exist!")
+endif()
+
+target_link_libraries(exe PRIVATE
+	bridge
+	Wintrust
+)
+
+if(MSVC) # msvc
+	target_link_libraries(exe PRIVATE
+		Delayimp
+	)
+endif()
+
+if(MSVC) # msvc
+	target_link_options(exe PRIVATE
+		"/MANIFEST:NO"
+		"/DELAYLOAD:user32.dll"
+		"/DELAYLOAD:wintrust.dll"
+		"/DELAYLOAD:$<TARGET_FILE_NAME:bridge>"
+		"/NOIMPLIB"
+		"/NOEXP"
+		"/LARGEADDRESSAWARE"
+	)
+endif()
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 4) # x86
+	add_dependencies(exe
+		launcher
+	)
+endif()
+
+add_dependencies(exe
+	dbg
+	gui
+	loaddll
+	deps
+	third_party
+)
+
+set_target_properties(exe PROPERTIES
+	MSVC_RUNTIME_LIBRARY
+		"MultiThreaded$<$<CONFIG:Debug>:Debug>"
+	WIN32_EXECUTABLE
+		ON
+)
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 4) # x86
+	set_target_properties(exe PROPERTIES
+		OUTPUT_NAME
+			x32dbg
+		ARCHIVE_OUTPUT_NAME
+			x32dbg_exe
+		PDB_NAME
+			x32dbg_exe
+	)
+endif()
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 8) # x64
+	set_target_properties(exe PROPERTIES
+		OUTPUT_NAME
+			x64dbg
+		ARCHIVE_OUTPUT_NAME
+			x64dbg_exe
+		PDB_NAME
+			x64dbg_exe
+	)
+endif()
+
+get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
+if(NOT CMKR_VS_STARTUP_PROJECT)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT exe)
+endif()
+
 # Target: loaddll
 set(loaddll_SOURCES
 	cmake.toml
@@ -848,7 +1081,21 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 8) # x64
 	)
 endif()
 
+if(MSVC) # msvc
+	target_link_libraries(loaddll PRIVATE
+		Delayimp
+	)
+endif()
+
+if(MSVC) # msvc
+	target_link_options(loaddll PRIVATE
+		"/DELAYLOAD:user32.dll"
+	)
+endif()
+
 set_target_properties(loaddll PROPERTIES
+	MSVC_RUNTIME_LIBRARY
+		"MultiThreaded$<$<CONFIG:Debug>:Debug>"
 	WIN32_EXECUTABLE
 		ON
 )
@@ -858,83 +1105,43 @@ if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT loaddll)
 endif()
 
-# Target: exe
-set(exe_SOURCES
+# Target: headless
+set(headless_SOURCES
 	cmake.toml
-	"src/exe/LoadResourceString.h"
-	"src/exe/crashdump.cpp"
-	"src/exe/crashdump.h"
-	"src/exe/icon.h"
-	"src/exe/manifest.xml"
-	"src/exe/resource.h"
-	"src/exe/resource.rc"
-	"src/exe/signaturecheck.cpp"
-	"src/exe/signaturecheck.h"
-	"src/exe/strings.h"
-	"src/exe/strings.rc"
-	"src/exe/x64dbg_exe.cpp"
+	"src/headless/headless.cpp"
+	"src/headless/signaturecheck.cpp"
+	"src/headless/stringutils.cpp"
+	"src/headless/stringutils.h"
+	"src/headless/tostring.h"
 )
 
-if(CMAKE_SIZEOF_VOID_P EQUAL 4) # x86
-	list(APPEND exe_SOURCES
-		"src/exe/icon32.rc"
-	)
+add_executable(headless)
+
+target_sources(headless PRIVATE ${headless_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${headless_SOURCES})
+
+if(NOT TARGET bridge)
+	message(FATAL_ERROR "Target \"bridge\" referenced by \"headless\" does not exist!")
 endif()
 
-if(CMAKE_SIZEOF_VOID_P EQUAL 8) # x64
-	list(APPEND exe_SOURCES
-		"src/exe/icon64.rc"
-	)
-endif()
-
-add_executable(exe)
-
-target_sources(exe PRIVATE ${exe_SOURCES})
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${exe_SOURCES})
-
-target_link_libraries(exe PRIVATE
+target_link_libraries(headless PRIVATE
 	bridge
-	Wintrust
 )
 
 if(MSVC) # msvc
-	target_link_options(exe PRIVATE
-		"/DEF:${CMAKE_SOURCE_DIR}/src/exe/signaturecheck.def"
-		"/INCREMENTAL:NO"
+	target_link_options(headless PRIVATE
+		"/LARGEADDRESSAWARE"
 	)
 endif()
 
-if(CMAKE_SIZEOF_VOID_P EQUAL 4) # x86
-	set_target_properties(exe PROPERTIES
-		OUTPUT_NAME
-			x32dbg
-		PDB_NAME
-			x32dbg_exe
-	)
-endif()
-
-if(CMAKE_SIZEOF_VOID_P EQUAL 8) # x64
-	set_target_properties(exe PROPERTIES
-		OUTPUT_NAME
-			x64dbg
-		PDB_NAME
-			x64dbg_exe
-	)
-endif()
-
-set_target_properties(exe PROPERTIES
-	WIN32_EXECUTABLE
-		ON
+add_dependencies(headless
+	exe
 )
 
 get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
 if(NOT CMKR_VS_STARTUP_PROJECT)
-	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT exe)
+	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT headless)
 endif()
-
-set(CMKR_TARGET exe)
-# Make the executable the main target
-add_dependencies(exe dbg gui deps)
 
 # Target: launcher
 if(CMAKE_SIZEOF_VOID_P EQUAL 4) # x86
@@ -942,7 +1149,7 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 4) # x86
 		cmake.toml
 		"src/exe/icon.rc"
 		"src/exe/resource.rc"
-		"src/exe/strings.rc"
+		"src/exe/strings_utf8.rc"
 		"src/launcher/x64dbg_launcher.cpp"
 	)
 
@@ -956,12 +1163,27 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 4) # x86
 		Comctl32
 	)
 
+	if(MSVC) # msvc
+		target_link_options(launcher PRIVATE
+			"/MANIFEST:NO"
+		)
+	endif()
+
 	set_target_properties(launcher PROPERTIES
+		MSVC_RUNTIME_LIBRARY
+			"MultiThreaded$<$<CONFIG:Debug>:Debug>"
 		OUTPUT_NAME
 			x96dbg
 		WIN32_EXECUTABLE
 			ON
 	)
+
+	if(X64DBG_BUILD_IN_TREE) # X64DBG_BUILD_IN_TREE
+		set_target_properties(launcher PROPERTIES
+			RUNTIME_OUTPUT_DIRECTORY
+				"${PROJECT_SOURCE_DIR}/bin"
+		)
+	endif()
 
 	get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
 	if(NOT CMKR_VS_STARTUP_PROJECT)

@@ -12,6 +12,7 @@ SimpleTraceDialog::SimpleTraceDialog(QWidget* parent) :
 {
     ui->setupUi(this);
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint | Qt::MSWindowsFixedSizeDialogHint);
+    resize(SimpleTraceDialog::minimumSizeHint());
     duint setting;
     if(!BridgeSettingGetUint("Engine", "MaxTraceCount", &setting))
         setting = 50000;
@@ -78,6 +79,19 @@ void SimpleTraceDialog::on_btnOk_clicked()
     if(!DbgCmdExecDirect(QString("TraceSetLogFile \"%1\"").arg(escapeText(mLogFile)).toUtf8().constData()))
     {
         SimpleWarningBox(this, tr("Error"), tr("Failed to set log file!"));
+        return;
+    }
+    // Set module filter
+    QString filterType;
+    if(ui->radioFilterUser->isChecked())
+        filterType = "user";
+    else if(ui->radioFilterSystem->isChecked())
+        filterType = "system";
+    else
+        filterType = "none";
+    if(!DbgCmdExecDirect(QString("TraceSetStepFilter %1").arg(filterType).toUtf8().constData()))
+    {
+        SimpleWarningBox(this, tr("Error"), tr("Failed to set module filter!"));
         return;
     }
     auto breakCondition = ui->editBreakCondition->addHistoryClear();
